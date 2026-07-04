@@ -1,0 +1,18 @@
+# One-click deploy of the team review console to Render (free tier).
+# Render dashboard -> New + -> Blueprint -> pick this repo -> set the two env vars.
+# Free tier sleeps when idle (first load after a quiet spell takes ~50s) — fine for
+# an internal review tool.
+services:
+  - type: web
+    name: cfi-defect-review
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn review.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL          # Supabase SESSION POOLER url (IPv4)
+        sync: false
+      - key: REVIEW_USERS          # "deepanshu:strongpass,akhtar:otherpass"
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.12.4"

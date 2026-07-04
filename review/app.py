@@ -12,12 +12,38 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fastapi import FastAPI, Form, HTTPException
+import os
+import secrets as _secrets
+
+from fastapi import Depends, FastAPI, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from pipeline.db import connect
 
 app = FastAPI(title="CFI Defect Repository — Review Queue")
+
+# --- team auth (HTTP Basic) -------------------------------------------------
+# REVIEW_USERS env var: "deepanshu:pass1,akhtar:pass2". Unset -> open local mode.
+# The Basic username becomes the reviewer identity in the review_action audit log.
+_basic = HTTPBasic(auto_error=False)
+
+
+def _users() -> dict[str, str]:
+    raw = os.environ.get("REVIEW_USERS", "")
+    return dict(u.split(":", 1) for u in raw.split(",") if ":" in u)
+
+
+def reviewer(credentials: HTTPBasicCredentials | None = Depends(_basic)) -> str:
+    users = _users()
+    if not users:
+        return "reviewer:local"
+    if credentials:
+        expected = users.get(credentials.username)
+        if expected and _secrets.compare_digest(credentials.password, expected):
+            return f"reviewer:{credentials.username}"
+    raise HTTPException(401, "Reviewer login required",
+                        headers={"WWW-Authenticate": "Basic realm=CFI-review"})
 
 CSS = """
 body{font-family:-apple-system,'Segoe UI',Arial,sans-serif;margin:0;background:#F8F7FF;color:#1a1c1c}
@@ -65,10 +91,11 @@ def x(sql: str, params=()) -> None:
         cur.execute(sql, params)
 
 
-def log_action(entity_id: int, action: str, before=None, after=None, note: str = "") -> None:
+def log_action(entity_id: int, action: str, before=None, after=None, note: str = "",
+               who: str = "reviewer:ui") -> None:
     x("""insert into review_action (entity_type, entity_id, reviewer, action,
-         before_json, after_json, note) values ('incident',%s,'reviewer:ui',%s,%s,%s,%s)""",
-      (entity_id, action, json.dumps(before, default=str) if before else None,
+         before_json, after_json, note) values ('incident',%s,%s,%s,%s,%s,%s)""",
+      (entity_id, who, action, json.dumps(before, default=str) if before else None,
        json.dumps(after, default=str) if after else None, note))
 
 
@@ -78,7 +105,7 @@ def snapshot(iid: int) -> dict | None:
 
 
 @app.get("/qa", response_class=HTMLResponse)
-def qa():
+def qa(who: str = Depends(reviewer)):
     """Phase 10 — internal QA / observability."""
     def table(title, headers, data):
         head = "".join(f"<th style='text-align:left;padding:6px 14px;font-size:11px;color:#777589'>{h}</th>" for h in headers)
@@ -130,13 +157,13 @@ def qa():
 
 
 @app.post("/correction/{cid}/resolve")
-def resolve_correction(cid: int):
+def resolve_correction(cid: int, who: str = Depends(reviewer)):
     x("update correction set status='resolved', resolved_at=now() where id=%s", (cid,))
     return RedirectResponse("/qa", status_code=303)
 
 
 @app.get("/", response_class=HTMLResponse)
-def queue():
+def queue(who: str = Depends(reviewer)):
     rows = q("""
       select r.id, r.queue_reason, r.crash_date, r.location_text_best, r.road_name,
              r.road_type, r.admin_district, r.admin_state, r.fatalities, r.injuries,
@@ -175,28 +202,28 @@ def queue():
   </div>
 </div>""")
     return f"""<style>{CSS}</style>
-<div class="top">Crashfree India · Review Queue<small>{len(rows)} awaiting review · {n_pub} public</small></div>
+<div class="top">Crashfree India · Review Queue<small>{len(rows)} awaiting review · {n_pub} public · signed in: {who.removeprefix("reviewer:")} · <a href="/qa" style="color:#C8C0FF">QA</a></small></div>
 <div class="wrap"><div class="count">Approve overrides the confidence gate. Every action is audit-logged.</div>
 {''.join(cards) or '<div class="card">Queue is empty 🎉</div>'}</div>"""
 
 
 @app.post("/incident/{iid}/approve")
-def approve(iid: int):
+def approve(iid: int, who: str = Depends(reviewer)):
     before = snapshot(iid)
     if not before:
         raise HTTPException(404)
     x("update incident set verification_status='reviewed' where id=%s", (iid,))
-    log_action(iid, "approve", before, note="reviewer approved -> publish")
+    log_action(iid, "approve", before, note="reviewer approved -> publish", who=who)
     return RedirectResponse("/", status_code=303)
 
 
 @app.post("/incident/{iid}/reject")
-def reject(iid: int):
+def reject(iid: int, who: str = Depends(reviewer)):
     before = snapshot(iid)
     if not before:
         raise HTTPException(404)
     x("update incident set verification_status='rejected' where id=%s", (iid,))
-    log_action(iid, "reject", before, note="reviewer rejected")
+    log_action(iid, "reject", before, note="reviewer rejected", who=who)
     return RedirectResponse("/", status_code=303)
 
 
@@ -205,7 +232,7 @@ EDITABLE = ["crash_date", "location_text_best", "road_name", "road_type", "admin
 
 
 @app.get("/incident/{iid}/edit", response_class=HTMLResponse)
-def edit_form(iid: int):
+def edit_form(iid: int, who: str = Depends(reviewer)):
     rows = q(f"select {', '.join(EDITABLE)} from incident where id=%s", (iid,))
     if not rows:
         raise HTTPException(404)
@@ -225,7 +252,7 @@ from fastapi import Request  # noqa: E402
 
 
 @app.post("/incident/{iid}/edit")
-async def edit_save_form(iid: int, request: Request):
+async def edit_save_form(iid: int, request: Request, who: str = Depends(reviewer)):
     form = dict(await request.form())
     before = snapshot(iid)
     if not before:
@@ -239,24 +266,24 @@ async def edit_save_form(iid: int, request: Request):
     vals.append(iid)
     x(f"update incident set {', '.join(sets)}, verification_status='reviewed', "
       f"updated_at=now() where id=%s", tuple(vals))
-    log_action(iid, "edit", before, snapshot(iid), note="reviewer edit -> reviewed")
+    log_action(iid, "edit", before, snapshot(iid), note="reviewer edit -> reviewed", who=who)
     return RedirectResponse("/", status_code=303)
 
 
 @app.post("/incident/{iid}/merge")
-async def merge(iid: int, into: str = Form(...)):
+async def merge(iid: int, into: str = Form(...), who: str = Depends(reviewer)):
     target = int(into.strip().lstrip("#"))
     if not snapshot(iid) or not snapshot(target):
         raise HTTPException(404)
     from pipeline.processing.dedup import merge_incident
     with connect() as conn:
         merge_incident(conn, keep_id=target, merge_id=iid)
-    log_action(target, "merge", note=f"reviewer merged #{iid} into #{target}")
+    log_action(target, "merge", note=f"reviewer merged #{iid} into #{target}", who=who)
     return RedirectResponse("/", status_code=303)
 
 
 @app.post("/incident/{iid}/split")
-def split(iid: int):
+def split(iid: int, who: str = Depends(reviewer)):
     before = snapshot(iid)
     if not before:
         raise HTTPException(404)
@@ -273,5 +300,5 @@ def split(iid: int):
     x("""insert into incident_source (incident_id, source_article_id, match_confidence)
          select %s, source_article_id, match_confidence from incident_source
          where incident_id=%s on conflict do nothing""", (new_id, iid))
-    log_action(iid, "split", before, note=f"cloned to #{new_id}; edit both")
+    log_action(iid, "split", before, note=f"cloned to #{new_id}; edit both", who=who)
     return RedirectResponse(f"/incident/{new_id}/edit", status_code=303)
