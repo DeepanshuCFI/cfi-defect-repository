@@ -78,20 +78,28 @@ def _decode_gnews_id(url: str) -> str | None:
     return cand if re.match(r"https?://[\w.-]+\.\w{2,}/", cand + "/") else None
 
 
+_resolve_cache: dict[str, tuple[str, bool]] = {}
+
+
 def resolve_url(google_url: str, client: httpx.Client | None = None) -> tuple[str, bool]:
+    if google_url in _resolve_cache:          # same article surfaces in several queries
+        return _resolve_cache[google_url]
     # Old-format ids sometimes carry the URL in base64 — cheap, try first.
     dec = _decode_gnews_id(google_url)
     if dec and "news.google.com" not in dec:
+        _resolve_cache[google_url] = (dec, True)
         return dec, True
     # Current format (AU_yq… ids) needs Google's batchexecute round-trip.
+    out = (google_url, False)
     try:
         from googlenewsdecoder import gnewsdecoder
         r = gnewsdecoder(google_url, interval=1)
         if r.get("status") and r.get("decoded_url"):
-            return r["decoded_url"], True
+            out = (r["decoded_url"], True)
     except Exception:
         pass
-    return google_url, False
+    _resolve_cache[google_url] = out
+    return out
 
 
 def collect(query: str, lang: str, days: int = 7, max_items: int = 30,
