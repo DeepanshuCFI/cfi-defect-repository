@@ -1,0 +1,114 @@
+{
+  "_meta": {
+    "purpose": "Multilingual keyword pack for the CFI infra-defect repository. Feed into Google News RSS query generation (district x keyword x language) and as a cheap pre-filter before LLM extraction.",
+    "usage": "Query template: \"<district_name> <crash_term>\". Also OR-combine infra_defect terms to bias toward infrastructure-relevant crashes. Terms are seed values — review with a native speaker per state before national rollout; script/spelling variants are common.",
+    "categories": ["crash", "fatality", "injury", "crash_type", "infra_defect"],
+    "note": "Transliterations (e.g. 'accident', 'hit and run') appear in vernacular text too — keep the English list active for every language."
+  },
+  "languages": {
+    "en": {
+      "name": "English",
+      "crash": ["road accident", "accident", "crash", "collision", "road mishap", "fatal accident"],
+      "fatality": ["killed", "dead", "died", "death toll", "deceased", "fatalities"],
+      "injury": ["injured", "grievously injured", "critical", "hurt"],
+      "crash_type": ["hit and run", "overturned", "run over", "head-on collision", "rammed", "mowed down", "skidded"],
+      "infra_defect": ["pothole", "no signage", "missing signboard", "no traffic signal", "unmarked speed breaker", "blind curve", "blind turn", "no streetlight", "poor lighting", "missing divider", "missing crash barrier", "no guardrail", "waterlogging", "under construction", "black spot", "no zebra crossing", "no footpath", "encroachment", "faded road markings", "unmanned railway crossing", "sharp curve"]
+    },
+    "hi": {
+      "name": "Hindi",
+      "crash": ["सड़क दुर्घटना", "दुर्घटना", "हादसा", "एक्सीडेंट", "टक्कर", "भिड़ंत"],
+      "fatality": ["मौत", "मृत्यु", "मारे गए", "जान गई", "मृतक"],
+      "injury": ["घायल", "ज़ख्मी", "गंभीर"],
+      "crash_type": ["हिट एंड रन", "पलटी", "कुचला", "टक्कर मार"],
+      "infra_defect": ["गड्ढा", "गड्ढे", "स्पीड ब्रेकर", "अंधा मोड़", "स्ट्रीट लाइट नहीं", "डिवाइडर", "जलभराव", "ब्लैक स्पॉट", "निर्माणाधीन", "अतिक्रमण", "बिना संकेतक"]
+    },
+    "mr": {
+      "name": "Marathi",
+      "crash": ["रस्ते अपघात", "अपघात", "धडक", "भीषण अपघात"],
+      "fatality": ["मृत्यू", "ठार", "मृत", "बळी"],
+      "injury": ["जखमी", "गंभीर"],
+      "crash_type": ["पलटी", "चिरडले", "धडक दिली", "हिट अंड रन"],
+      "infra_defect": ["खड्डा", "खड्डे", "स्पीड ब्रेकर", "अंध वळण", "दिवाबत्ती नाही", "पाणी साचणे", "ब्लॅक स्पॉट", "दुभाजक"]
+    },
+    "ta": {
+      "name": "Tamil",
+      "crash": ["சாலை விபத்து", "விபத்து", "மோதல்"],
+      "fatality": ["பலி", "உயிரிழப்பு", "இறப்பு", "மரணம்"],
+      "injury": ["காயம்", "படுகாயம்"],
+      "crash_type": ["மோதி", "கவிழ்ந்து", "ஹிட் அண்ட் ரன்"],
+      "infra_defect": ["பள்ளம்", "சாலை பள்ளம்", "சுழற்சி", "விளக்கு இல்லை", "தண்ணீர் தேக்கம்"]
+    },
+    "te": {
+      "name": "Telugu",
+      "crash": ["రోడ్డు ప్రమాదం", "ప్రమాదం", "ఢీ"],
+      "fatality": ["మృతి", "మరణం", "చనిపోయారు", "బలి"],
+      "injury": ["గాయాలు", "తీవ్రంగా గాయపడ్డారు"],
+      "crash_type": ["బోల్తా", "ఢీకొట్టి", "హిట్ అండ్ రన్"],
+      "infra_defect": ["గుంత", "గుంతలు", "స్పీడ్ బ్రేకర్", "మలుపు", "లైట్లు లేవు", "నీటి నిల్వ"]
+    },
+    "bn": {
+      "name": "Bengali",
+      "crash": ["পথ দুর্ঘটনা", "দুর্ঘটনা", "সংঘর্ষ"],
+      "fatality": ["মৃত্যু", "নিহত", "মৃত"],
+      "injury": ["আহত", "গুরুতর আহত"],
+      "crash_type": ["উল্টে", "চাপা", "ধাক্কা", "হিট অ্যান্ড রান"],
+      "infra_defect": ["গর্ত", "খানাখন্দ", "স্পিড ব্রেকার", "বাঁক", "আলো নেই", "জল জমা"]
+    },
+    "kn": {
+      "name": "Kannada",
+      "crash": ["ರಸ್ತೆ ಅಪಘಾತ", "ಅಪಘಾತ", "ಡಿಕ್ಕಿ"],
+      "fatality": ["ಸಾವು", "ಮೃತ", "ಬಲಿ", "ಮೃತ್ಯು"],
+      "injury": ["ಗಾಯ", "ಗಂಭೀರ ಗಾಯ"],
+      "crash_type": ["ಪಲ್ಟಿ", "ಡಿಕ್ಕಿ ಹೊಡೆದು", "ಹಿಟ್ ಅಂಡ್ ರನ್"],
+      "infra_defect": ["ಗುಂಡಿ", "ರಸ್ತೆ ಗುಂಡಿ", "ಸ್ಪೀಡ್ ಬ್ರೇಕರ್", "ತಿರುವು", "ಬೀದಿದೀಪ ಇಲ್ಲ"]
+    },
+    "gu": {
+      "name": "Gujarati",
+      "crash": ["માર્ગ અકસ્માત", "અકસ્માત", "અથડામણ"],
+      "fatality": ["મોત", "મૃત્યુ", "મૃત", "ભોગ"],
+      "injury": ["ઈજા", "ગંભીર ઈજા"],
+      "crash_type": ["પલટી", "કચડી", "ટક્કર", "હિટ ઐન્ડ રન"],
+      "infra_defect": ["ખાડા", "ખાડો", "સ્પીડ બ્રેકર", "વળાંક", "લાઇટ નથી", "પાણી ભરાવા"]
+    },
+    "ml": {
+      "name": "Malayalam",
+      "crash": ["റോഡ് അപകടം", "അപകടം", "കൂട്ടിയിടി"],
+      "fatality": ["മരണം", "മരിച്ചു", "കൊല്ലപ്പെട്ടു"],
+      "injury": ["പരിക്ക്", "ഗുരുതരം"],
+      "crash_type": ["മറിഞ്ഞു", "ഇടിച്ചു", "ഹിറ്റ് ആന്‍ഡ് റൺ"],
+      "infra_defect": ["കുഴി", "റോഡ് കുഴി", "വളവ്", "വെളിച്ചമില്ല", "വെള്ളക്കെട്ട്"]
+    },
+    "pa": {
+      "name": "Punjabi",
+      "crash": ["ਸੜਕ ਹਾਦਸਾ", "ਹਾਦਸਾ", "ਦੁਰਘਟਨਾ", "ਟੱਕਰ"],
+      "fatality": ["ਮੌਤ", "ਮ੍ਰਿਤਕ", "ਜਾਨ ਗਈ"],
+      "injury": ["ਜ਼ਖਮੀ", "ਗੰਭੀਰ"],
+      "crash_type": ["ਪਲਟੀ", "ਕੁਚਲਿਆ", "ਟੱਕਰ ਮਾਰੀ"],
+      "infra_defect": ["ਟੋਆ", "ਟੋਏ", "ਸਪੀਡ ਬ੍ਰੇਕਰ", "ਮੋੜ", "ਲਾਈਟ ਨਹੀਂ"]
+    },
+    "or": {
+      "name": "Odia",
+      "crash": ["ସଡ଼କ ଦୁର୍ଘଟଣା", "ଦୁର୍ଘଟଣା", "ଧକ୍କା"],
+      "fatality": ["ମୃତ୍ୟୁ", "ମୃତ", "ପ୍ରାଣ ହରାଇ"],
+      "injury": ["ଆହତ", "ଗୁରୁତର"],
+      "crash_type": ["ଓଲଟି", "ମାଡ଼ି", "ଧକ୍କା"],
+      "infra_defect": ["ଗାତ", "ରାସ୍ତା ଗାତ", "ବାଙ୍କ", "ଆଲୋକ ନାହିଁ"]
+    },
+    "as": {
+      "name": "Assamese",
+      "crash": ["পথ দুৰ্ঘটনা", "দুৰ্ঘটনা", "খুন্দা"],
+      "fatality": ["মৃত্যু", "নিহত"],
+      "injury": ["আহত", "গুৰুতৰ"],
+      "crash_type": ["লুটিয়াই", "খুন্দা মাৰি"],
+      "infra_defect": ["গাত", "বাট গাত", "বেংক"]
+    },
+    "ur": {
+      "name": "Urdu",
+      "crash": ["سڑک حادثہ", "حادثہ", "تصادم", "ٹکر"],
+      "fatality": ["ہلاکت", "موت", "جاں بحق"],
+      "injury": ["زخمی", "شدید زخمی"],
+      "crash_type": ["الٹ", "کچل", "ٹکر ماری", "ہٹ اینڈ رن"],
+      "infra_defect": ["گڑھا", "گڑھے", "اسپیڈ بریکر", "موڑ", "روشنی نہیں", "پانی جمع"]
+    }
+  }
+}

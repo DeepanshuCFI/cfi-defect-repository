@@ -1,0 +1,95 @@
+name,language,region_state,tier,website,domain_verify,coverage_notes
+Dainik Bhaskar,Hindi,"Madhya Pradesh, Rajasthan, multi",regional,bhaskar.com,pending,Largest Hindi daily; strong district editions
+Dainik Jagran,Hindi,"Uttar Pradesh, multi",regional,jagran.com,pending,Dense UP/Bihar district coverage
+Amar Ujala,Hindi,"Uttar Pradesh, Uttarakhand",regional,amarujala.com,pending,Strong UP/UK city desks
+Hindustan (Hindi),Hindi,"Bihar, Uttar Pradesh",regional,livehindustan.com,pending,Bihar/Jharkhand district reach
+Rajasthan Patrika,Hindi,"Rajasthan, multi",regional,patrika.com,pending,Rajasthan + MP/CG editions
+Nai Dunia,Hindi,Madhya Pradesh,district,naidunia.com,pending,MP-focused
+Prabhat Khabar,Hindi,"Jharkhand, Bihar",regional,prabhatkhabar.com,pending,East-Hindi belt
+Punjab Kesari,Hindi,"Punjab, North India",regional,punjabkesari.in,pending,North India
+Haribhoomi,Hindi,"Chhattisgarh, Haryana",district,haribhoomi.com,pending,CG/Haryana
+Deshbandhu,Hindi,Chhattisgarh,district,deshbandhu.co.in,pending,Central India
+Nava Bharat,Hindi,"Maharashtra, Madhya Pradesh",regional,navabharat.news,pending,Vidarbha/MP Hindi
+Dainik Tribune,Hindi,"Punjab, Haryana",regional,dainiktribuneonline.com,pending,Tribune group Hindi
+Jansatta,Hindi,National,national,jansatta.com,pending,Indian Express group
+Lokmat,Marathi,Maharashtra,regional,lokmat.com,pending,Largest Marathi daily; wide district net
+Sakal,Marathi,Maharashtra,regional,esakal.com,pending,Pune/W-Mah strong
+Maharashtra Times,Marathi,Maharashtra,regional,maharashtratimes.com,pending,TOI group Marathi
+Loksatta,Marathi,Maharashtra,regional,loksatta.com,pending,Indian Express group Marathi
+Pudhari,Marathi,"Kolhapur, Western Maharashtra",district,pudhari.news,pending,W-Mah/Konkan
+Divya Marathi,Marathi,Maharashtra,regional,divyamarathi.bhaskar.com,pending,Bhaskar group
+Saamana,Marathi,Maharashtra,regional,saamana.com,pending,Mumbai/Konkan
+Tarun Bharat (Marathi),Marathi,"Konkan, Belgaum",district,tarunbharat.com,pending,Konkan/border districts
+Daily Thanthi,Tamil,Tamil Nadu,regional,dailythanthi.com,pending,Largest Tamil daily; district editions
+Dinamalar,Tamil,Tamil Nadu,regional,dinamalar.com,pending,Strong TN local desks
+Dinakaran,Tamil,Tamil Nadu,regional,dinakaran.com,pending,Sun group
+Dinamani,Tamil,Tamil Nadu,regional,dinamani.com,pending,New Indian Express group
+Maalai Malar,Tamil,Tamil Nadu,district,maalaimalar.com,pending,Evening/local
+Hindu Tamil Thisai,Tamil,Tamil Nadu,regional,hindutamil.in,pending,The Hindu Tamil
+Vikatan,Tamil,Tamil Nadu,regional,vikatan.com,pending,Magazine/web
+Eenadu,Telugu,"Andhra Pradesh, Telangana",regional,eenadu.net,pending,Largest Telugu daily; dense district net
+Sakshi,Telugu,"Andhra Pradesh, Telangana",regional,sakshi.com,pending,Wide AP/TG coverage
+Andhra Jyothy,Telugu,"Andhra Pradesh, Telangana",regional,andhrajyothy.com,pending,District editions
+Namasthe Telangana,Telugu,Telangana,district,ntnews.com,pending,Telangana-focused
+V6 Velugu,Telugu,Telangana,district,v6velugu.com,pending,Telangana local
+Vaartha,Telugu,"Andhra Pradesh, Telangana",regional,vaartha.com,pending,Regional
+Prajasakti,Telugu,"Andhra Pradesh, Telangana",district,prajasakti.com,pending,Left daily; local desks
+Prajavani,Kannada,Karnataka,regional,prajavani.net,pending,Largest Kannada daily
+Vijaya Karnataka,Kannada,Karnataka,regional,vijaykarnataka.com,pending,TOI group Kannada
+Udayavani,Kannada,Coastal Karnataka,regional,udayavani.com,pending,Coastal/Malnad strong
+Kannada Prabha,Kannada,Karnataka,regional,kannadaprabha.com,pending,New Indian Express group
+Vijayavani,Kannada,Karnataka,regional,vijayavani.net,pending,Wide circulation
+Vartha Bharati,Kannada,"Coastal, South Karnataka",district,varthabharati.in,pending,Coastal districts
+Anandabazar Patrika,Bengali,West Bengal,regional,anandabazar.com,pending,Largest Bengali daily
+Bartaman,Bengali,West Bengal,regional,bartamanpatrika.com,pending,District desks
+Ei Samay,Bengali,West Bengal,regional,eisamay.com,pending,TOI group Bengali
+Sangbad Pratidin,Bengali,West Bengal,regional,sangbadpratidin.in,pending,Statewide
+Aajkaal,Bengali,West Bengal,regional,aajkaal.in,pending,Kolkata/districts
+Uttarbanga Sambad,Bengali,North Bengal,district,uttarbangasambad.com,pending,North Bengal districts
+Gujarat Samachar,Gujarati,Gujarat,regional,gujaratsamachar.com,pending,Largest Gujarati daily
+Divya Bhaskar,Gujarati,Gujarat,regional,divyabhaskar.co.in,pending,Bhaskar group; city editions
+Sandesh,Gujarati,Gujarat,regional,sandesh.com,pending,Statewide
+Phulchhab,Gujarati,Saurashtra,district,phulchhab.com,pending,Saurashtra
+Nobat,Gujarati,Jamnagar,district,nobat.com,pending,Jamnagar/Saurashtra
+Malayala Manorama,Malayalam,Kerala,regional,manoramaonline.com,pending,Largest Malayalam daily; dense local
+Mathrubhumi,Malayalam,Kerala,regional,mathrubhumi.com,pending,Statewide district net
+Deshabhimani,Malayalam,Kerala,regional,deshabhimani.com,pending,Local desks
+Madhyamam,Malayalam,Kerala,regional,madhyamam.com,pending,Statewide
+Kerala Kaumudi,Malayalam,Kerala,regional,keralakaumudi.com,pending,Statewide
+Mangalam,Malayalam,Kerala,district,mangalam.com,pending,Local
+Ajit,Punjabi,Punjab,regional,ajitjalandhar.com,pending,Largest Punjabi daily
+Punjabi Tribune,Punjabi,Punjab,regional,punjabitribuneonline.com,pending,Tribune group
+Jagbani,Punjabi,Punjab,regional,jagbani.punjabkesari.in,pending,Punjab Kesari group
+Rozana Spokesman,Punjabi,Punjab,district,rozanaspokesman.com,pending,Punjab local
+Sambad,Odia,Odisha,regional,sambad.in,pending,Leading Odia daily; district editions
+Dharitri,Odia,Odisha,regional,dharitri.com,pending,Statewide
+The Samaja,Odia,Odisha,regional,thesamaja.in,pending,Statewide
+Prameya,Odia,Odisha,district,prameyanews.com,pending,Odia + English
+Asomiya Pratidin,Assamese,Assam,regional,asomiyapratidin.in,pending,Leading Assamese daily
+The Sentinel,English,Assam,regional,sentinelassam.com,pending,NE English
+Shillong Times,English,Meghalaya,district,theshillongtimes.com,pending,Meghalaya
+Nagaland Post,English,Nagaland,district,nagalandpost.com,pending,Nagaland
+Imphal Free Press,English,Manipur,district,ifp.co.in,pending,Manipur
+Inquilab,Urdu,"Maharashtra, multi",regional,inquilab.com,pending,Urdu daily; Mumbai/UP
+Siasat,Urdu,"Telangana (Hyderabad)",district,siasat.com,pending,Hyderabad/Deccan
+Munsif Daily,Urdu,Telangana,district,munsifdaily.com,pending,Hyderabad
+Etemaad,Urdu,Telangana,district,etemaaddaily.com,pending,Hyderabad
+The Tribune,English,"Punjab, Haryana, HP, J&K",regional,tribuneindia.com,pending,North India district-strong
+Deccan Herald,English,Karnataka,regional,deccanherald.com,pending,Karnataka + South
+Deccan Chronicle,English,"Telangana, AP, TN",regional,deccanchronicle.com,pending,South city editions
+The Telegraph,English,"West Bengal, East, NE",regional,telegraphindia.com,pending,East India
+The New Indian Express,English,"South India",regional,newindianexpress.com,pending,South city desks
+The Hitavada,English,"Vidarbha, Central India",district,thehitavada.com,pending,Nagpur/Central
+Free Press Journal,English,"Maharashtra, MP",regional,freepressjournal.in,pending,Mumbai/MP
+Orissa Post,English,Odisha,regional,orissapost.com,pending,Odisha English
+Telangana Today,English,Telangana,regional,telanganatoday.com,pending,Telangana English
+Herald Goa,English,Goa,district,heraldgoa.in,pending,Goa
+The Goan,English,Goa,district,thegoan.net,pending,Goa
+Greater Kashmir,English,Jammu & Kashmir,regional,greaterkashmir.com,pending,Kashmir valley
+Daily Excelsior,English,Jammu & Kashmir,regional,dailyexcelsior.com,pending,Jammu region
+Kashmir Reader,English,Jammu & Kashmir,district,kashmirreader.com,pending,Valley
+Nagaland Page,English,Nagaland,district,nagalandpage.com,pending,Nagaland
+Arunachal Times,English,Arunachal Pradesh,district,arunachaltimes.in,pending,Arunachal
+Tripura Times,English,Tripura,district,tripuratimes.com,pending,Tripura
+Meghalaya Monitor,English,Meghalaya,district,,pending,VERIFY existence/domain before use
+Sikkim Express,English,Sikkim,district,sikkimexpress.com,pending,Sikkim
