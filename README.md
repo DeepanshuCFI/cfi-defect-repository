@@ -207,4 +207,31 @@ python3 -m pipeline.run collect --gdelt en,hi --timespan 1d         # GDELT net
 | 9 | Read-only API + corrections | pending |
 | 10 | Observability / QA dashboard | pending |
 
-First milestone (§E of the runbook): Phases 1–6 end-to-end on **one state** (Bihar proposed).
+## §E MILESTONE — Bihar end-to-end ✅ (2026-07-04)
+
+All 38 Bihar districts, 7-day window, full pipeline: **1,733 RSS items → 902 stored →
+729 syndicated near-dups filtered → 137 full-text → 49 incidents extracted (0 failures,
+0 non-verbatim snippets) → geocoded (41/49 road-level or better) → 5 same-crash merges
+→ 45 hotspots scored (11 High tier)**. Registry: 54 incidents · 32 evidenced defect
+claims · 10 public · 43 in review queue · 46 audit rows.
+
+Headline finds:
+- **SH-77 Katihar (73.2, High)** — 4 deaths; blind curve + vegetation-obscured visibility
+  + missing signage, each with verbatim Hindi evidence. A ready-made government ask.
+- **"Angrezi Dhala", NH-31 Begusarai** — four outlets' reports of a head-on (4 dead)
+  auto-merged into ONE incident with 4 corroborating sources; coverage names it a
+  repeat-crash location.
+- **Siwan–Gopalganj main road (67.3)** — two distinct crashes clustered at one stretch.
+- Geolocation honesty: Bihar district pages yielded incidents physically in JH/WB/UP —
+  placed where the crash is, not where the page is.
+
+Bugs found & fixed by this run (each now covered in code):
+1. crash_date mis-yeared — extractor never saw publication date; relative dates
+   ("on Friday") landed in the wrong year, breaking recency/escalation/dedup.
+   Fixed prompt + `scripts/repair_dates.py` (39 corrected, 17 confirmed-old kept).
+2. Transitive dedup merges crashed mid-chain — dedup now loops until stable.
+3. Score query join-multiplied incident aggregates per source (a 4-source incident
+   counted as 4 crashes) — aggregates now computed separately.
+
+No escalation flags yet — correct: the ≥3-in-6-months rule needs accumulation, and we
+have a 7-day window. Daily runs build toward it.

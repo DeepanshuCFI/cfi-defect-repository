@@ -44,7 +44,8 @@ class DBStore:
     def articles_by_status(self, status: str, limit: int = 100) -> list[dict]:
         with self.conn.cursor() as cur:
             cur.execute(
-                """select id, url, outlet_name, language, state, district, clean_text
+                """select id, url, outlet_name, language, state, district, clean_text,
+                          published_at
                    from source_article where processing_status = %s
                    order by id limit %s""", (status, limit))
             cols = [d.name for d in cur.description]

@@ -134,9 +134,15 @@ def validate_snippets(result: dict, article_text: str) -> tuple[dict, list[str]]
     return result, dropped
 
 
-def extract(title: str | None, text: str) -> tuple[dict, list[str]]:
+def extract(title: str | None, text: str,
+            published_at: str | None = None) -> tuple[dict, list[str]]:
     model = configload.settings()["models"]["extraction"]
-    content = f"TITLE: {title or '(none)'}\n\nARTICLE:\n{text[:7000]}"
+    pub = f"ARTICLE PUBLISHED: {published_at}\n" if published_at else ""
+    content = (f"{pub}TITLE: {title or '(none)'}\n\nARTICLE:\n{text[:7000]}\n\n"
+               "Resolve relative dates (e.g. 'on Friday', 'yesterday', weekday names "
+               "with no year) against the published date above. If the article "
+               "clearly reports an OLD crash (an anniversary/retrospective), keep the "
+               "old date. If no date is derivable, use null.")
     msg = _get_client().messages.create(
         model=model, max_tokens=2000, system=SYSTEM,
         tools=[build_tool()], tool_choice={"type": "tool", "name": "record_incident"},

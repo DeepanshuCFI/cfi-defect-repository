@@ -145,7 +145,8 @@ def cmd_process(args) -> None:
                 print(f"  - irrelevant #{a['id']} ({cls.get('kind')}): {cls.get('reason','')[:60]}")
                 continue
             try:
-                inc, dropped = ex.extract(title, text)
+                inc, dropped = ex.extract(title, text,
+                                          published_at=str(a.get("published_at") or "") or None)
             except Exception as e:
                 print(f"  WARN extraction failed #{a['id']}: {e}")
                 store.set_article_status(a["id"], "failed")

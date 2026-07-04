@@ -70,17 +70,22 @@ def run(today: date | None = None) -> dict:
         cur.execute("select id from hotspot")
         hids = [r[0] for r in cur.fetchall()]
         for hid in hids:
+            # NOTE: incident aggregates and source counts computed separately —
+            # joining incident_source here multiplies incident rows per source
+            # (found live: a 4-source incident scored as 4 crashes).
             cur.execute("""
               select coalesce(sum(i.fatalities),0), coalesce(sum(i.injuries),0),
                      count(*) filter (where i.crash_date >= %s - interval '6 months'),
                      %s - max(i.crash_date),
                      avg(case when i.victim_types && %s::text[] then 1.0 else 0.0 end),
-                     count(distinct s.source_article_id),
+                     (select count(distinct s.source_article_id)
+                      from incident_source s
+                      join incident i2 on i2.id = s.incident_id
+                      where i2.cluster_id = %s),
                      avg(i.geocode_confidence)
               from incident i
-              left join incident_source s on s.incident_id = i.id
               where i.cluster_id = %s""",
-              (today, today, list(VULNERABLE), hid))
+              (today, today, list(VULNERABLE), hid, hid))
             (fat, inj, inc6, days_last, vuln, nsrc, gconf) = cur.fetchone()
             cur.execute("""
               select max(t.severity_weight)

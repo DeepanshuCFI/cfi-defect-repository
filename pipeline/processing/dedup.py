@@ -83,12 +83,26 @@ def merge_incident(conn, keep_id: int, merge_id: int) -> None:
     conn.commit()
 
 
-def run() -> dict:
-    merged = 0
+def run(max_rounds: int = 4) -> dict:
+    """Merge until stable. Pairs are recomputed each round because merges are
+    transitive (A~B, B~C: after B->A, C must re-pair against A, not the dead B)."""
+    merged = found = 0
     with connect() as conn:
-        pairs = find_pairs(conn)
-        for keep, merge, dist in pairs:
-            print(f"  merging #{merge} -> #{keep} ({dist:.0f} m apart)")
-            merge_incident(conn, keep, merge)
-            merged += 1
-    return {"pairs_found": len(pairs), "merged": merged}
+        for _ in range(max_rounds):
+            pairs = find_pairs(conn)
+            found += len(pairs)
+            if not pairs:
+                break
+            gone: set[int] = set()
+            progressed = False
+            for keep, merge, dist in pairs:
+                if keep in gone or merge in gone:
+                    continue                    # references an id merged this round
+                print(f"  merging #{merge} -> #{keep} ({dist:.0f} m apart)")
+                merge_incident(conn, keep, merge)
+                gone.add(merge)
+                merged += 1
+                progressed = True
+            if not progressed:
+                break
+    return {"pairs_found": found, "merged": merged}
