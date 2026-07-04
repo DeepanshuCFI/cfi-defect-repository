@@ -1,4 +1,4 @@
-export default function Drawer({ feature, incidents, meta, tierColor, tierLabel, onClose }) {
+export default function Drawer({ feature, incidents, meta, tierColor, tierText, tierLabel, onClose }) {
   const p = feature.properties
   const members = incidents
     .filter(i => i.hotspot_id === p.id)
@@ -20,8 +20,8 @@ export default function Drawer({ feature, incidents, meta, tierColor, tierLabel,
       <div className="sticky top-0 bg-white border-b border-line px-5 py-3.5 flex justify-between items-start gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <span className="font-heading font-bold text-[11px] px-2.5 py-0.5 rounded-full text-white"
-              style={{ background: tierColor[p.tier] }}>
+            <span className="font-heading font-bold text-[11px] px-2.5 py-0.5 rounded-full"
+              style={{ background: tierColor[p.tier], color: tierText?.[p.tier] || '#fff' }}>
               {tierLabel[p.tier].toUpperCase()} · {Number(p.score).toFixed(1)}
             </span>
             {p.escalation && (

@@ -119,19 +119,27 @@ def cmd_collect(args) -> None:
 
 def cmd_process(args) -> None:
     """Phase 3: fetched -> relevance -> extraction -> incident."""
+    from pipeline import configload
     from pipeline.processing import extract as ex
+    from pipeline.processing import prefilter
     from pipeline.processing import relevance as rel
+    proc_cfg = configload.settings().get("processing", {})
     store = get_store(force_jsonl=args.jsonl)
     try:
         arts = store.articles_by_status("fetched", limit=args.limit)
         print(f"processing {len(arts)} fetched article(s)…")
-        stats = {"irrelevant": 0, "extracted": 0, "failed": 0, "snippets_dropped": 0}
+        stats = {"prefiltered": 0, "irrelevant": 0, "extracted": 0, "extracted_light": 0,
+                 "skipped_pure_crash": 0, "failed": 0, "snippets_dropped": 0}
         for a in arts:
             text = a.get("clean_text") or ""
             if not text.strip():
                 store.set_article_status(a["id"], "failed")
                 stats["failed"] += 1
                 continue
+            if proc_cfg.get("body_prefilter", True) and not prefilter.passes(text):
+                store.set_article_status(a["id"], "irrelevant")
+                stats["prefiltered"] += 1
+                continue                      # zero tokens spent
             title = text.split("\n", 1)[0][:140]
             try:
                 cls = rel.classify(title, text)
@@ -144,9 +152,18 @@ def cmd_process(args) -> None:
                 stats["irrelevant"] += 1
                 print(f"  - irrelevant #{a['id']} ({cls.get('kind')}): {cls.get('reason','')[:60]}")
                 continue
+            pure_crash = cls.get("kind") == "crash"
+            if pure_crash and proc_cfg.get("skip_pure_crashes", False):
+                # defect-focus max-savings mode: don't extract behaviour-only crashes.
+                # NOTE: weakens the >=3-in-6mo escalation counter — off by default.
+                store.set_article_status(a["id"], "irrelevant")
+                stats["skipped_pure_crash"] += 1
+                continue
+            light = pure_crash and proc_cfg.get("tiered_extraction", True)
             try:
                 inc, dropped = ex.extract(title, text,
-                                          published_at=str(a.get("published_at") or "") or None)
+                                          published_at=str(a.get("published_at") or "") or None,
+                                          light=light)
             except Exception as e:
                 print(f"  WARN extraction failed #{a['id']}: {e}")
                 store.set_article_status(a["id"], "failed")
@@ -160,7 +177,7 @@ def cmd_process(args) -> None:
             defects = inc.pop("defects", [])
             iid = store.insert_incident(inc, defects, a["id"])
             store.set_article_status(a["id"], "extracted")
-            stats["extracted"] += 1
+            stats["extracted_light" if light else "extracted"] += 1
             dstr = ",".join(d["defect_type"] for d in defects) or "-"
             print(f"  + incident #{iid} <- art #{a['id']} [{cls.get('kind')}] "
                   f"F{inc['fatalities']}/I{inc['injuries']} conf={inc['extraction_confidence']:.2f} "

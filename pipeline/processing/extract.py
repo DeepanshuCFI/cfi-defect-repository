@@ -135,8 +135,13 @@ def validate_snippets(result: dict, article_text: str) -> tuple[dict, list[str]]
 
 
 def extract(title: str | None, text: str,
-            published_at: str | None = None) -> tuple[dict, list[str]]:
-    model = configload.settings()["models"]["extraction"]
+            published_at: str | None = None,
+            light: bool = False) -> tuple[dict, list[str]]:
+    """light=True uses the cheap model — for pure-behaviour crashes that only feed
+    location crash-frequency counts; infra-implicated coverage gets the strong model."""
+    models = configload.settings()["models"]
+    model = models.get("extraction_light", models["extraction"]) if light \
+        else models["extraction"]
     pub = f"ARTICLE PUBLISHED: {published_at}\n" if published_at else ""
     content = (f"{pub}TITLE: {title or '(none)'}\n\nARTICLE:\n{text[:7000]}\n\n"
                "Resolve relative dates (e.g. 'on Friday', 'yesterday', weekday names "

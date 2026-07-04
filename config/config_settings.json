@@ -61,8 +61,14 @@
     },
     "models": {
       "relevance": "claude-haiku-4-5-20251001",
-      "extraction": "claude-sonnet-5"
+      "extraction": "claude-sonnet-5",
+      "extraction_light": "claude-haiku-4-5-20251001"
     },
-    "recency_half_life_days": 90
+    "recency_half_life_days": 90,
+    "processing": {
+      "body_prefilter": true,
+      "tiered_extraction": true,
+      "skip_pure_crashes": false
+    }
   }
 }

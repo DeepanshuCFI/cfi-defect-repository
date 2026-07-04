@@ -3,7 +3,10 @@ import MapView from './MapView.jsx'
 import Drawer from './Drawer.jsx'
 import Rankings from './Rankings.jsx'
 
-const TIER_COLOR = { critical: '#F10015', high: '#F57C00', medium: '#4A35FF', watch: '#777589' }
+// Red intensity ramp — CFI rule: red = danger, and every dot here is a danger location.
+// Darker = higher priority; tiers stay separable at small sizes.
+const TIER_COLOR = { critical: '#8F000B', high: '#F10015', medium: '#FF6159', watch: '#F3B0AA' }
+const TIER_TEXT = { critical: '#fff', high: '#fff', medium: '#fff', watch: '#8C1D16' }
 const TIER_LABEL = { critical: 'Critical', high: 'High', medium: 'Medium', watch: 'Watch' }
 
 export default function App() {
@@ -133,7 +136,7 @@ export default function App() {
               onSelect={f => setSelected(f)} selectedId={selected?.properties?.id} />
             {selected && (
               <Drawer feature={selected} incidents={data.inc} meta={meta}
-                tierColor={TIER_COLOR} tierLabel={TIER_LABEL}
+                tierColor={TIER_COLOR} tierText={TIER_TEXT} tierLabel={TIER_LABEL}
                 onClose={() => setSelected(null)} />
             )}
           </main>
@@ -142,7 +145,7 @@ export default function App() {
 
       {tab === 'rankings' && (
         <Rankings features={data.hs.features} meta={meta}
-          tierColor={TIER_COLOR} tierLabel={TIER_LABEL}
+          tierColor={TIER_COLOR} tierText={TIER_TEXT} tierLabel={TIER_LABEL}
           onOpen={f => { setSelected(f); setTab('map') }} />
       )}
 

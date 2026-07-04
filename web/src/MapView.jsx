@@ -14,6 +14,8 @@ export default function MapView({ features, heat, tierColor, onSelect, selectedI
       center: [82.5, 23.2], zoom: 4.4, attributionControl: { compact: true },
     })
     map.current.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
+    map.current.on('error', e => console.error('[maplibre]', e?.error?.message || e))
+    if (import.meta.env.DEV) window.__map = map.current
     map.current.on('load', () => {
       const m = map.current
       m.addSource('hs', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
@@ -75,5 +77,7 @@ export default function MapView({ features, heat, tierColor, onSelect, selectedI
     }
   }, [selectedId])
 
-  return <div ref={el} className="absolute inset-0" />
+  // inline style: maplibre-gl.css sets .maplibregl-map{position:relative}, which
+  // overrides Tailwind's .absolute and collapses the container to 0 height.
+  return <div ref={el} style={{ position: 'absolute', inset: 0 }} />
 }

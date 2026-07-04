@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 
-export default function Rankings({ features, meta, tierColor, tierLabel, onOpen }) {
+export default function Rankings({ features, meta, tierColor, tierText, tierLabel, onOpen }) {
   const [state, setState] = useState('')
   const rows = useMemo(() =>
     features
@@ -78,8 +78,8 @@ export default function Rankings({ features, meta, tierColor, tierLabel, onOpen 
                   </span>
                 </span>
                 <span>
-                  <span className="font-heading font-bold text-[12px] px-2.5 py-1 rounded-full text-white"
-                    style={{ background: tierColor[p.tier] }}>
+                  <span className="font-heading font-bold text-[12px] px-2.5 py-1 rounded-full"
+                    style={{ background: tierColor[p.tier], color: tierText?.[p.tier] || '#fff' }}>
                     {Number(p.score).toFixed(1)}
                   </span>
                 </span>
