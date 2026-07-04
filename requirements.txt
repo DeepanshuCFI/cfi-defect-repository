@@ -1,0 +1,11 @@
+# Phase 1–6 pipeline deps. FastAPI/uvicorn arrive with Phase 7/9; web/ has its own package.json (Phase 8).
+anthropic>=0.40
+feedparser>=6.0
+trafilatura>=1.12
+httpx>=0.27
+psycopg[binary]>=3.2
+python-dotenv>=1.0
+simhash>=2.1
+shapely>=2.0
+langdetect>=1.0.9
+tenacity>=9.0

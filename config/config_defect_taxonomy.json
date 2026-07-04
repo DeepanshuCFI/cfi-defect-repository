@@ -1,0 +1,29 @@
+{
+  "_meta": {
+    "purpose": "Controlled defect vocabulary (BUILD_SPEC §5) with severity weights for the priority engine (§9 w5). Edit here, then re-run scripts/load_configs.py. severity_weight: 1 (low) – 5 (high).",
+    "note": "requires_review=true entries never publish without reviewer approval. no_infrastructure_defect_identified is stored on incidents but excluded from the public defect map."
+  },
+  "taxonomy": [
+    {"code": "no_or_faded_road_markings",              "label": "No / faded road markings",                  "severity_weight": 2.5},
+    {"code": "missing_or_inadequate_signage",          "label": "Missing or inadequate signage",             "severity_weight": 3.0},
+    {"code": "no_street_lighting",                     "label": "No street lighting",                        "severity_weight": 3.0},
+    {"code": "unmarked_or_illegal_speed_breaker",      "label": "Unmarked / illegal speed breaker",          "severity_weight": 3.5},
+    {"code": "potholes_or_broken_surface",             "label": "Potholes / broken surface",                 "severity_weight": 3.5},
+    {"code": "sharp_or_blind_curve_geometry",          "label": "Sharp / blind curve geometry",              "severity_weight": 4.0},
+    {"code": "missing_crash_barrier_or_guardrail",     "label": "Missing crash barrier / guardrail",         "severity_weight": 4.5},
+    {"code": "unsafe_junction_or_intersection_design", "label": "Unsafe junction / intersection design",     "severity_weight": 4.0},
+    {"code": "missing_pedestrian_crossing_or_FOB",     "label": "Missing pedestrian crossing / FOB",         "severity_weight": 4.0},
+    {"code": "missing_footpath_or_encroached_footpath","label": "Missing / encroached footpath",             "severity_weight": 3.5},
+    {"code": "median_gap_or_illegal_U_turn",           "label": "Median gap / illegal U-turn",               "severity_weight": 4.0},
+    {"code": "no_service_road_direct_access",          "label": "No service road / direct access",           "severity_weight": 3.5},
+    {"code": "waterlogging_or_poor_drainage",          "label": "Waterlogging / poor drainage",              "severity_weight": 3.0},
+    {"code": "unsafe_construction_or_work_zone",       "label": "Unsafe construction / work zone",           "severity_weight": 4.0},
+    {"code": "missing_rumble_strips",                  "label": "Missing rumble strips",                     "severity_weight": 2.5},
+    {"code": "poor_visibility_vegetation_or_obstruction","label": "Poor visibility (vegetation/obstruction)","severity_weight": 3.0},
+    {"code": "unprotected_railway_or_level_crossing",  "label": "Unprotected railway / level crossing",      "severity_weight": 5.0},
+    {"code": "steep_gradient_or_missing_runaway_provision","label": "Steep gradient / no runaway provision", "severity_weight": 4.0},
+    {"code": "known_blackspot_untreated",              "label": "Known blackspot, untreated",                "severity_weight": 5.0},
+    {"code": "other_infrastructure",                   "label": "Other infrastructure (reviewer-confirmed)", "severity_weight": 3.0, "requires_review": true},
+    {"code": "no_infrastructure_defect_identified",    "label": "No infrastructure defect identified",       "severity_weight": 1.0, "maps_to_defects": false}
+  ]
+}

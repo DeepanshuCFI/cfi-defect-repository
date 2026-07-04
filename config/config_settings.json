@@ -1,0 +1,41 @@
+{
+  "_meta": {
+    "purpose": "Runtime-tunable settings (CLAUDE.md: weights & thresholds live in config/, not code). Upserted into config_setting by scripts/load_configs.py; the pipeline reads them from the DB.",
+    "spec_refs": {"priority_weights": "§9", "confidence_gate": "§8", "cluster_epsilon_m": "§7.6", "ingestion": "§6"}
+  },
+  "settings": {
+    "priority_weights": {
+      "w1_fatalities_weighted": 0.30,
+      "w2_crash_frequency": 0.25,
+      "w3_recency": 0.15,
+      "w4_vulnerable_user_share": 0.15,
+      "w5_defect_severity": 0.10,
+      "w6_evidence_strength": 0.05
+    },
+    "casualty_weights": {"fatality": 5, "grievous_injury": 2, "minor_injury": 1},
+    "priority_tiers": {"critical": 75, "high": 50, "medium": 25, "watch": 0},
+    "escalation_rule": {"min_incidents": 3, "window_months": 6},
+    "confidence_gate": {
+      "extraction_confidence_min": 0.7,
+      "geocode_confidence_min": 0.6,
+      "require_infra_implicated": true
+    },
+    "cluster_epsilon_m": {
+      "NH": 300, "SH": 300, "MDR": 250, "district": 250,
+      "urban_arterial": 150, "urban_local": 150, "rural": 250, "unknown": 200
+    },
+    "cluster_min_points": 1,
+    "dedup": {"date_window_days": 1, "spatial_window_m": 1000, "simhash_hamming_max": 6},
+    "ingestion": {
+      "national_share_cap": 0.10,
+      "rss_results_per_query": 30,
+      "fetch_timeout_s": 30,
+      "per_domain_delay_s": 2.0
+    },
+    "models": {
+      "relevance": "claude-haiku-4-5",
+      "extraction": "claude-sonnet-5"
+    },
+    "recency_half_life_days": 90
+  }
+}
