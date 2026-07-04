@@ -77,6 +77,64 @@ def snapshot(iid: int) -> dict | None:
     return rows[0]["rj"] if rows else None
 
 
+@app.get("/qa", response_class=HTMLResponse)
+def qa():
+    """Phase 10 — internal QA / observability."""
+    def table(title, headers, data):
+        head = "".join(f"<th style='text-align:left;padding:6px 14px;font-size:11px;color:#777589'>{h}</th>" for h in headers)
+        body = "".join("<tr>" + "".join(
+            f"<td style='padding:6px 14px;font-size:13px;border-top:1px solid #EDEEF2'>{html.escape(str(c))}</td>"
+            for c in row) + "</tr>" for row in data)
+        return (f"<div class='card'><h3 style='margin:0 0 8px'>{title}</h3>"
+                f"<table style='border-collapse:collapse;width:100%'><tr>{head}</tr>{body}</table></div>")
+
+    ingest = q("""select coalesce(state,'(gdelt/unknown)') s, language,
+                         count(*) total,
+                         count(*) filter (where processing_status='extracted') extracted,
+                         count(*) filter (where processing_status='irrelevant') irrelevant,
+                         count(*) filter (where processing_status='near_duplicate') near_dup,
+                         count(*) filter (where processing_status='failed') failed
+                  from source_article group by 1,2 order by 3 desc limit 20""")
+    geo = q("""select coalesce(geocode_method,'unresolved') m, count(*),
+                      round(avg(geocode_confidence)::numeric,2)
+               from incident group by 1 order by 2 desc""")
+    funnel = q("""select processing_status, count(*) from source_article
+                  group by 1 order by 2 desc""")
+    merges = q("select count(*) c from review_action where action='merge'")[0]["c"]
+    hs = q("""select status, count(*), count(*) filter (where escalation_candidate) esc
+              from hotspot group by 1""")
+    runs = q("""select id, started_at::timestamp(0), finished_at::timestamp(0), ok,
+                       coalesce(note,'') from pipeline_run order by id desc limit 10""")
+    corr = q("""select id, entity_type, entity_id, status, left(message,80), created_at::date
+                from correction order by id desc limit 20""")
+    nq = q("select count(*) c from review_queue")[0]["c"]
+    npub = q("select count(*) c from public_incident")[0]["c"]
+
+    parts = [
+        f"<div class='count'>Review queue backlog: <b>{nq}</b> · Public incidents: <b>{npub}</b> · Auto-merges to date: <b>{merges}</b></div>",
+        table("Pipeline runs (latest 10) — alerting: ok=False means a stage failed",
+              ["id", "started", "finished", "ok", "note"],
+              [(r["id"], r["started_at"], r["finished_at"], r["ok"], r["coalesce"]) for r in runs]),
+        table("Ingestion by state × language", ["state", "lang", "total", "extracted", "irrelevant", "near-dup", "failed"],
+              [tuple(r.values()) for r in ingest]),
+        table("Article funnel", ["status", "count"], [tuple(r.values()) for r in funnel]),
+        table("Geocode confidence by method", ["method", "n", "avg conf"], [tuple(r.values()) for r in geo]),
+        table("Hotspot statuses", ["status", "n", "escalation flags"], [tuple(r.values()) for r in hs]),
+        table("Corrections", ["id", "entity", "entity_id", "status", "message", "filed"],
+              [tuple(r.values()) for r in corr]) +
+        "<div class='meta'>Resolve corrections: approve/edit/reject the disputed incident in the <a href='/'>queue</a>, then POST /correction/{id}/resolve.</div>",
+    ]
+    return (f"<style>{CSS}</style><div class='top'>QA & Observability"
+            f"<small><a href='/' style='color:#C8C0FF'>← review queue</a></small></div>"
+            f"<div class='wrap'>{''.join(parts)}</div>")
+
+
+@app.post("/correction/{cid}/resolve")
+def resolve_correction(cid: int):
+    x("update correction set status='resolved', resolved_at=now() where id=%s", (cid,))
+    return RedirectResponse("/qa", status_code=303)
+
+
 @app.get("/", response_class=HTMLResponse)
 def queue():
     rows = q("""

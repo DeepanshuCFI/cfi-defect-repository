@@ -226,7 +226,34 @@ chips + score breakdown + Hindi evidence quotes + source links; zero console err
 
 ---
 
-## Phases 9–10 (per spec §11)
+## Phase 9 — Public API + corrections ✅ (live-verified)
+
+- `api/app.py` (`python3 -m uvicorn api.app:app --port 8610`, OpenAPI docs at `/docs`):
+  `GET /api/meta · /api/hotspots (state/district/min-score/repeat/defect filters) ·
+  /api/hotspots/{id} (full dossier) · /api/incidents (+date range) · /api/incidents/{id}`.
+  Reads ONLY `public_*` views; non-public ids 404.
+- `POST /api/corrections` — files a public correction: entry gains a **visible
+  “disputed” badge** (it is NOT removed — prevents censorship-by-correction), lands in
+  the reviewer queue as `disputed_by_correction`, audit-logged. Resolve from `/qa`.
+- Live-verified round trip: correction filed → incident disputed → still public+badged
+  on the site → queued for review → resolved.
+
+## Phase 10 — Observability / QA ✅ (live-verified)
+
+- `review/app.py` `/qa`: pipeline-run history (ok/failed = the alert surface),
+  ingestion volume by state×language, article funnel, geocode-confidence by method,
+  hotspot statuses + escalation flags, review backlog, corrections.
+- `pipeline_run` telemetry table written by every `daily` run.
+
+## Operations — daily cron
+
+```bash
+crontab -e   # add:
+30 6 * * *  /bin/bash /Users/a39002/Documents/Claude/crashfree-infra-repo/scripts/daily.sh
+```
+`pipeline.run daily` = collect (states from `config_settings.json →
+ingestion.daily_states`, default Bihar) → process → geocode → recompute → export,
+with telemetry to `pipeline_run` (failures visible on `/qa` and non-zero exit).
 
 | Phase | What | Status |
 |---|---|---|
@@ -237,8 +264,8 @@ chips + score breakdown + Hindi evidence quotes + source links; zero console err
 | 6 | Priority engine + nightly recompute | ✅ code + live-verified |
 | 7 | Confidence gate + review queue UI | ✅ code + live-verified |
 | 8 | Public dashboard (React + Vite + Tailwind + MapLibre) | ✅ code + live-verified |
-| 9 | Read-only API + corrections | pending |
-| 10 | Observability / QA dashboard | pending |
+| 9 | Read-only API + corrections | ✅ code + live-verified |
+| 10 | Observability / QA dashboard | ✅ code + live-verified |
 
 ## §E MILESTONE — Bihar end-to-end ✅ (2026-07-04)
 

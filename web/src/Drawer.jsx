@@ -110,8 +110,10 @@ export default function Drawer({ feature, incidents, meta, tierColor, tierLabel,
               ))}
             </div>
             <div className="mt-1.5 text-[10.5px] text-muted">
-              {i.verification === 'reviewed' || i.verification === 'verified'
-                ? '✓ human-reviewed' : 'auto-published (passed confidence gate)'}
+              {i.verification === 'disputed'
+                ? <span className="text-warn font-semibold">⚠ disputed — correction under review</span>
+                : i.verification === 'reviewed' || i.verification === 'verified'
+                  ? '✓ human-reviewed' : 'auto-published (passed confidence gate)'}
               {' · '}location: {i.geocode_method?.replaceAll('_', ' ')} ({Math.round((i.geocode_conf || 0) * 100)}%)
             </div>
           </div>

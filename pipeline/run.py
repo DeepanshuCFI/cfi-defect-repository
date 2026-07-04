@@ -244,6 +244,51 @@ def cmd_recompute(args) -> None:
                   f"{road[:34]} · {dist}, {st}  [{dom or '-'}]")
 
 
+def cmd_daily(args) -> None:
+    """The cron entrypoint: collect -> process -> geocode -> recompute -> export,
+    with telemetry to pipeline_run (surfaced on /qa). States from config
+    ingestion.daily_states (default ['Bihar'])."""
+    import json as _json
+    import traceback
+
+    from pipeline.db import connect
+    states = configload.settings().get("ingestion", {}).get("daily_states", ["Bihar"])
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("insert into pipeline_run (note) values (%s) returning id",
+                    (f"daily: {', '.join(states)}",))
+        run_id = cur.fetchone()[0]
+        conn.commit()
+    stats, ok = {}, True
+    try:
+        for st in states:
+            a = argparse.Namespace(district=None, state=st, gdelt=None, timespan="1d",
+                                   days=args.days, max_per_query=15, lang_terms=3,
+                                   delay=2.0, no_fetch=False, jsonl=False)
+            cmd_collect(a)
+        stats["collect"] = "done"
+        cmd_process(argparse.Namespace(limit=1000, jsonl=False))
+        stats["process"] = "done"
+        cmd_geocode(argparse.Namespace(limit=1000, jsonl=False))
+        stats["geocode"] = "done"
+        cmd_recompute(argparse.Namespace())
+        stats["recompute"] = "done"
+        from scripts.export_public import main as export_main
+        export_main()
+        stats["export"] = "done"
+    except Exception:
+        ok = False
+        stats["error"] = traceback.format_exc()[-1500:]
+        print(stats["error"])
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("""update pipeline_run set finished_at=now(), ok=%s,
+                       stage_stats=%s::jsonb where id=%s""",
+                    (ok, _json.dumps(stats), run_id))
+        conn.commit()
+    print(f"daily run #{run_id} ok={ok}")
+    if not ok:
+        raise SystemExit(1)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="pipeline.run")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -273,6 +318,10 @@ def main() -> None:
     rc = sub.add_parser("recompute",
                         help="Phase 5+6: dedup -> cluster -> score (the nightly job)")
     rc.set_defaults(func=cmd_recompute)
+
+    dl = sub.add_parser("daily", help="cron: collect->process->geocode->recompute->export")
+    dl.add_argument("--days", type=int, default=2, help="RSS window (steady-state)")
+    dl.set_defaults(func=cmd_daily)
 
     args = p.parse_args()
     args.func(args)

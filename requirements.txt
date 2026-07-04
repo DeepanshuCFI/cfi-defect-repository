@@ -11,3 +11,6 @@ langdetect>=1.0.9
 tenacity>=9.0
 googlenewsdecoder>=0.1.7
 pytest>=8.0
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
