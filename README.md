@@ -193,7 +193,40 @@ python3 -m pipeline.run collect --gdelt en,hi --timespan 1d         # GDELT net
 
 ---
 
-## Phases 8–10 (per spec §11)
+## Phase 8 — Public dashboard ✅ (live-verified)
+
+**What it builds** — `web/` (Vite + React + Tailwind v4 + MapLibre GL, free Carto tiles;
+no Mapbox token needed). The site reads **static JSON exported from the public views
+only** (`scripts/export_public.py` → `web/public/data/`) — no DB exposure, deployable
+to any static host; Phase 9's API becomes an alternative data source later.
+
+- **Map-first:** tier-coloured hotspot circles (radius = crash count), heat-layer
+  toggle, click → full dossier drawer.
+- **Filters:** state → district, road type, defect (human labels), priority tier,
+  repeat-hotspots-only.
+- **Hotspot dossier:** tier + score badge, escalation flag, reported-defect chips,
+  **“Why this score” breakdown bars (never a black box)**, crash timeline with
+  narratives, verbatim evidence quotes, EVERY source link, per-incident trust line
+  (human-reviewed vs gate-passed, geocode method+confidence), “Report a correction”,
+  print/PDF.
+- **Rankings:** national + per-state leaderboard, **CSV evidence-pack export** (with
+  coordinates for GIS), print/PDF.
+- **Method & Honesty page** + permanent “AS REPORTED” disclaimer ribbon.
+
+**Run it**
+```bash
+python3 -m scripts.export_public       # refresh data after any recompute
+cd web && npm run dev                  # http://127.0.0.1:8700
+npm run build                          # static site in web/dist/ (deploy anywhere)
+```
+
+**Live verification** — build clean; browser-tested: filters reactive (Bihar → 5
+hotspots), rankings sorted (SH-77 Katihar #1 at 73.2), dossier drawer shows defect
+chips + score breakdown + Hindi evidence quotes + source links; zero console errors.
+
+---
+
+## Phases 9–10 (per spec §11)
 
 | Phase | What | Status |
 |---|---|---|
@@ -203,7 +236,7 @@ python3 -m pipeline.run collect --gdelt en,hi --timespan 1d         # GDELT net
 | 5 | Article→incident dedup + PostGIS DBSCAN hotspots | ✅ code + live-verified |
 | 6 | Priority engine + nightly recompute | ✅ code + live-verified |
 | 7 | Confidence gate + review queue UI | ✅ code + live-verified |
-| 8 | Public dashboard (React + Vite + Tailwind + MapLibre) | pending |
+| 8 | Public dashboard (React + Vite + Tailwind + MapLibre) | ✅ code + live-verified |
 | 9 | Read-only API + corrections | pending |
 | 10 | Observability / QA dashboard | pending |
 
