@@ -245,21 +245,17 @@ chips + score breakdown + Hindi evidence quotes + source links; zero console err
   hotspot statuses + escalation flags, review backlog, corrections.
 - `pipeline_run` telemetry table written by every `daily` run.
 
-## Operations — daily schedule ✅ INSTALLED (launchd, 2026-07-04)
+## Operations — daily schedule ✅ CLOUD (GitHub Actions, 2026-07-04)
 
-Installed as a LaunchAgent (better than cron on a Mac that sleeps — missed runs fire
-on wake): `~/Library/LaunchAgents/org.crashfreeindia.defect-repo.daily.plist`,
-daily **07:00 local**, running `scripts/daily.sh` → `pipeline.run daily`
-= collect (states from `config_settings.json → ingestion.daily_states`, default Bihar)
-→ process → geocode → recompute → export. Telemetry to `pipeline_run`
-(failures visible on `/qa`); logs in `logs/`.
+The pipeline runs **fully in the cloud**: `.github/workflows/daily.yml`, daily **07:00 IST**
+(01:30 UTC) on GitHub Actions (public repo = unlimited free minutes). Steps: collect
+(states from `config_settings.json → ingestion.daily_states`) → prefilter/triage/extract
+(tiered models) → geocode → recompute → export → **Vercel production deploy**.
+Credentials live in encrypted GitHub Actions secrets (`DATABASE_URL` uses the Supabase
+**session pooler** — runners are IPv4-only). Failures: GitHub email + `pipeline_run.ok`
+on `/qa`. Manual run: Actions tab → daily-pipeline → Run workflow, or the local
+fallback `bash scripts/daily.sh`. First cloud run: 2026-07-04, 35 min, success.
 
-```bash
-launchctl list | grep crashfreeindia                  # is it loaded?
-launchctl kickstart -k gui/$UID/org.crashfreeindia.defect-repo.daily   # run now
-launchctl unload ~/Library/LaunchAgents/org.crashfreeindia.defect-repo.daily.plist  # pause
-```
-(A crontab alternative remains in `scripts/daily.sh` comments for servers.)
 
 | Phase | What | Status |
 |---|---|---|
