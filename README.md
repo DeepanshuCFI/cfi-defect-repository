@@ -245,15 +245,21 @@ chips + score breakdown + Hindi evidence quotes + source links; zero console err
   hotspot statuses + escalation flags, review backlog, corrections.
 - `pipeline_run` telemetry table written by every `daily` run.
 
-## Operations — daily cron
+## Operations — daily schedule ✅ INSTALLED (launchd, 2026-07-04)
+
+Installed as a LaunchAgent (better than cron on a Mac that sleeps — missed runs fire
+on wake): `~/Library/LaunchAgents/org.crashfreeindia.defect-repo.daily.plist`,
+daily **07:00 local**, running `scripts/daily.sh` → `pipeline.run daily`
+= collect (states from `config_settings.json → ingestion.daily_states`, default Bihar)
+→ process → geocode → recompute → export. Telemetry to `pipeline_run`
+(failures visible on `/qa`); logs in `logs/`.
 
 ```bash
-crontab -e   # add:
-30 6 * * *  /bin/bash /Users/a39002/Documents/Claude/crashfree-infra-repo/scripts/daily.sh
+launchctl list | grep crashfreeindia                  # is it loaded?
+launchctl kickstart -k gui/$UID/org.crashfreeindia.defect-repo.daily   # run now
+launchctl unload ~/Library/LaunchAgents/org.crashfreeindia.defect-repo.daily.plist  # pause
 ```
-`pipeline.run daily` = collect (states from `config_settings.json →
-ingestion.daily_states`, default Bihar) → process → geocode → recompute → export,
-with telemetry to `pipeline_run` (failures visible on `/qa` and non-zero exit).
+(A crontab alternative remains in `scripts/daily.sh` comments for servers.)
 
 | Phase | What | Status |
 |---|---|---|
