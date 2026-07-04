@@ -24,3 +24,5 @@ dist-ssr
 *.sw?
 web/node_modules/
 web/dist/
+.vercel
+.env*

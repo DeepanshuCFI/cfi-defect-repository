@@ -7,3 +7,4 @@ data/raw_html/
 .DS_Store
 data/
 logs/
+web/.vercel/
