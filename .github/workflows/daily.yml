@@ -1,0 +1,45 @@
+name: daily-pipeline
+
+on:
+  schedule:
+    - cron: "30 1 * * *"        # 01:30 UTC = 07:00 IST
+  workflow_dispatch: {}          # manual runs from the Actions tab
+
+concurrency:
+  group: daily-pipeline
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily pipeline (collect -> process -> geocode -> recompute -> export)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}       # session-pooler URL (runners are IPv4-only)
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          PYTHONUNBUFFERED: "1"
+        run: python -m pipeline.run daily --days 2
+
+      - name: Deploy dashboard to Vercel
+        if: success()
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        working-directory: web
+        run: |
+          npm install --no-audit --no-fund
+          npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"
