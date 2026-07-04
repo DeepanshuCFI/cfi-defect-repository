@@ -10,3 +10,4 @@ shapely>=2.0
 langdetect>=1.0.9
 tenacity>=9.0
 googlenewsdecoder>=0.1.7
+pytest>=8.0

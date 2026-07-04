@@ -140,15 +140,46 @@ python3 -m pipeline.run collect --gdelt en,hi --timespan 1d         # GDELT net
 
 ---
 
-## Phases 5–10 (per spec §11)
+## Phases 5+6 — Dedup, hotspot clustering, priority engine ✅ (live-verified on Supabase)
+
+**Database is live.** Migrations applied to Supabase (Postgres 17.6 + PostGIS);
+722 districts + all configs loaded; pilot data imported (18 articles · 10 incidents ·
+17 defects after consistency cleanup).
+
+**What it builds**
+- `pipeline/processing/dedup.py` — same-crash merge (§7.5): date ±1d AND ≤1 km AND
+  compatible casualties; undated/ungeocoded never auto-merge; merges keep the higher-
+  confidence incident, move sources/defects, audit-log to `review_action`.
+- `pipeline/processing/cluster.py` — `ST_ClusterDBSCAN` hotspots (§7.6), eps from config
+  (mean 231 m). **Only geocode_confidence ≥ 0.5 clusters** — district centroids would
+  manufacture phantom hotspots. Stable rebuilds: hotspot keeps id/status if its new
+  centroid lands within 300 m.
+- `pipeline/processing/score.py` — §9 engine: 6 weighted components, saturating
+  normalisations, full raw+component+weights breakdown stored as jsonb; tiers
+  Critical/High/Medium/Watch; **≥3 incidents in 6 months → escalation_candidate**.
+- `pipeline/processing/gate.py` — §8 publish/review router (Phase 7 UI wraps this).
+- `pipeline/run.py recompute` — the nightly job: dedup → cluster → score → top-15 print.
+- `tests/test_core_logic.py` — 17 tests: dedup rules, score bounds/monotonicity/decay,
+  repeat-crash-outranks-single, tiers, all gate branches. `python3 -m pytest tests/ -q`
+
+**Live verification**
+- `recompute` on real data: 0 false merges (all 10 incidents genuinely distinct),
+  8 hotspots (2 centroid-level incidents correctly excluded), scored 9.2–37.1 —
+  Trichy SH30 (4 deaths, blind curve + untreated blackspot) correctly ranks #1;
+  no false escalation flags on single-incident hotspots.
+- Nightly cron: `python3 -m pipeline.run recompute` (schedule after ingestion).
+
+---
+
+## Phases 7–10 (per spec §11)
 
 | Phase | What | Status |
 |---|---|---|
 | 2 | Ingestion: Google News RSS (district×keyword×language) + GDELT + outlets | ✅ code + live-verified |
 | 3 | LLM relevance + forced-JSON extraction | ✅ code + live-verified |
 | 4 | Geocoding (most-specific-first, confidence-scored) | ✅ code + live-verified |
-| 5 | Article→incident dedup + PostGIS DBSCAN hotspots | pending |
-| 6 | Priority engine + nightly recompute | pending |
+| 5 | Article→incident dedup + PostGIS DBSCAN hotspots | ✅ code + live-verified |
+| 6 | Priority engine + nightly recompute | ✅ code + live-verified |
 | 7 | Confidence gate + review queue UI | pending |
 | 8 | Public dashboard (React + Vite + Tailwind + MapLibre) | pending |
 | 9 | Read-only API + corrections | pending |

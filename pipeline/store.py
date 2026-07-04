@@ -24,6 +24,18 @@ INCIDENT_FIELDS = ["crash_date", "crash_time", "location_text_raw", "location_te
                    "extraction_confidence", "primary_source_id"]
 
 
+def coerce_incident(inc: dict) -> dict:
+    """Fill NOT NULL defaults the model may omit (non-required schema fields)."""
+    inc = dict(inc)
+    inc["vehicles_involved"] = inc.get("vehicles_involved") or []
+    inc["victim_types"] = inc.get("victim_types") or []
+    inc["fatalities"] = inc.get("fatalities") or 0
+    inc["injuries"] = inc.get("injuries") or 0
+    inc["road_type"] = inc.get("road_type") or "unknown"
+    inc["infra_implicated"] = bool(inc.get("infra_implicated"))
+    return inc
+
+
 class DBStore:
     def __init__(self):
         from pipeline.db import connect
@@ -45,6 +57,7 @@ class DBStore:
         self.conn.commit()
 
     def insert_incident(self, inc: dict, defects: list[dict], article_id) -> int:
+        inc = coerce_incident(inc)
         cols = ", ".join(INCIDENT_FIELDS)
         ph = ", ".join(["%s"] * len(INCIDENT_FIELDS))
         with self.conn.cursor() as cur:

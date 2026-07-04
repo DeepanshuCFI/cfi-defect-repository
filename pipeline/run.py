@@ -217,6 +217,32 @@ def cmd_geocode(args) -> None:
     print(f"\nmethod distribution: {dist}")
 
 
+def cmd_recompute(args) -> None:
+    """Phase 5+6 nightly job: dedup incidents, rebuild hotspots, rescore."""
+    from pipeline.processing import cluster as cl
+    from pipeline.processing import dedup as dd
+    from pipeline.processing import score as sc
+    print("1/3 dedup…")
+    print("   ", dd.run())
+    print("2/3 cluster…")
+    print("   ", cl.run())
+    print("3/3 score…")
+    print("   ", sc.run())
+    from pipeline.db import connect
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("""
+          select h.id, h.priority_score, h.score_breakdown->>'tier', h.escalation_candidate,
+                 h.incident_count, h.fatality_count, h.injury_count,
+                 coalesce(h.road_name,'?'), coalesce(h.admin_district,'?'), coalesce(h.admin_state,'?'),
+                 array_to_string(h.dominant_defects,',')
+          from hotspot h order by h.priority_score desc nulls last limit 15""")
+        print("\nTOP HOTSPOTS")
+        for (hid, score, t, esc, n, f, i, road, dist, st, dom) in cur.fetchall():
+            flag = " ⚑ESCALATE" if esc else ""
+            print(f"  #{hid:>3} {score:5.1f} [{t:^8}]{flag} n={n} F{f}/I{i}  "
+                  f"{road[:34]} · {dist}, {st}  [{dom or '-'}]")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="pipeline.run")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -242,6 +268,10 @@ def main() -> None:
     g.add_argument("--limit", type=int, default=100)
     g.add_argument("--jsonl", action="store_true", help="force file storage (no DB)")
     g.set_defaults(func=cmd_geocode)
+
+    rc = sub.add_parser("recompute",
+                        help="Phase 5+6: dedup -> cluster -> score (the nightly job)")
+    rc.set_defaults(func=cmd_recompute)
 
     args = p.parse_args()
     args.func(args)
