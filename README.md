@@ -171,7 +171,29 @@ python3 -m pipeline.run collect --gdelt en,hi --timespan 1d         # GDELT net
 
 ---
 
-## Phases 7–10 (per spec §11)
+## Phase 7 — Confidence gate + review queue ✅ (live-verified)
+
+**What it builds**
+- `migrations/003_public_views.sql` + `004_…` — the §8 gate materialised as SQL views:
+  `public_incident` (gate passes on stored confidences OR reviewer override; rejected/
+  disputed never show), `public_incident_defect`, `public_hotspot` (public members only —
+  the public site never cites a number it can't source), `review_queue` (with per-row
+  failure reason). Phases 8/9 read ONLY these views.
+- `review/app.py` — FastAPI internal UI (`python3 -m uvicorn review.app:app --port 8600`):
+  queue cards with evidence snippets + source links, **approve / reject / edit / merge /
+  split**, every action audit-logged to `review_action`. Approve overrides the gate.
+
+**Live verification**
+- Routing before review: 3 auto-public · 6 queued (each with the correct reason) —
+  found & fixed a real bug: `real`-typed 0.7 fails `>= 0.7` by float precision, which
+  wrongly queued 3 threshold incidents (`004` migration).
+- Workflow: approved the NH-27 Supaul infra story → became public + hotspot went public
+  + `review_action` row written; rejected a behaviour-only crash → left queue, never
+  publishes. 17/17 tests still pass.
+
+---
+
+## Phases 8–10 (per spec §11)
 
 | Phase | What | Status |
 |---|---|---|
@@ -180,7 +202,7 @@ python3 -m pipeline.run collect --gdelt en,hi --timespan 1d         # GDELT net
 | 4 | Geocoding (most-specific-first, confidence-scored) | ✅ code + live-verified |
 | 5 | Article→incident dedup + PostGIS DBSCAN hotspots | ✅ code + live-verified |
 | 6 | Priority engine + nightly recompute | ✅ code + live-verified |
-| 7 | Confidence gate + review queue UI | pending |
+| 7 | Confidence gate + review queue UI | ✅ code + live-verified |
 | 8 | Public dashboard (React + Vite + Tailwind + MapLibre) | pending |
 | 9 | Read-only API + corrections | pending |
 | 10 | Observability / QA dashboard | pending |
