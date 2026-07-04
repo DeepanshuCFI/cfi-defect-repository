@@ -170,6 +170,53 @@ def cmd_process(args) -> None:
         store.close()
 
 
+def cmd_geocode(args) -> None:
+    """Phase 4: resolve location_text_best -> lat/lon + confidence + method."""
+    import json as _json
+
+    from pipeline.processing.geocode import geocode as geo
+    from pipeline.settings import DATABASE_URL, ROOT
+    use_db = not args.jsonl and DATABASE_URL and "REPLACE_ME" not in DATABASE_URL
+    dist: dict[str, int] = {}
+    if use_db:
+        from pipeline.db import connect
+        with connect() as conn, conn.cursor() as cur:
+            cur.execute("""select id, location_text_best, road_name, admin_city,
+                                  admin_district, admin_state
+                           from incident where geom is null limit %s""", (args.limit,))
+            rows = cur.fetchall()
+            print(f"geocoding {len(rows)} incident(s)…")
+            for iid, loc, road, city, distr, state in rows:
+                g = geo(loc or "", road, city, distr, state)
+                if g["lat"] is not None:
+                    cur.execute(
+                        """update incident set geom=ST_GeogFromText(%s),
+                           geocode_confidence=%s, geocode_method=%s where id=%s""",
+                        (f"POINT({g['lon']} {g['lat']})", g["geocode_confidence"],
+                         g["geocode_method"], iid))
+                dist[g["geocode_method"] or "unresolved"] = dist.get(g["geocode_method"] or "unresolved", 0) + 1
+                print(f"  #{iid} {g['geocode_method'] or 'UNRESOLVED'} "
+                      f"conf={g['geocode_confidence']} {(g['display_name'] or '')[:70]}")
+            conn.commit()
+    else:
+        path = ROOT / "data" / "incident.jsonl"
+        rows = [_json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+        todo = [r for r in rows if r.get("lat") is None][:args.limit]
+        print(f"geocoding {len(todo)} incident(s)…")
+        for r in todo:
+            g = geo(r.get("location_text_best") or "", r.get("road_name"),
+                    r.get("admin_city"), r.get("admin_district"), r.get("admin_state"))
+            r.update(g)
+            dist[g["geocode_method"] or "unresolved"] = dist.get(g["geocode_method"] or "unresolved", 0) + 1
+            print(f"  #{r['id']} {g['geocode_method'] or 'UNRESOLVED'} conf={g['geocode_confidence']}")
+            print(f"     loc: {(r.get('location_text_best') or '')[:76]}")
+            print(f"     got: {(g['display_name'] or '-')[:76]}  ({g['lat']}, {g['lon']})")
+        with open(path, "w") as f:
+            for r in rows:
+                f.write(_json.dumps(r, ensure_ascii=False) + "\n")
+    print(f"\nmethod distribution: {dist}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="pipeline.run")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -190,6 +237,11 @@ def main() -> None:
     pr.add_argument("--limit", type=int, default=50)
     pr.add_argument("--jsonl", action="store_true", help="force file storage (no DB)")
     pr.set_defaults(func=cmd_process)
+
+    g = sub.add_parser("geocode", help="Phase 4: geocode incidents lacking geom")
+    g.add_argument("--limit", type=int, default=100)
+    g.add_argument("--jsonl", action="store_true", help="force file storage (no DB)")
+    g.set_defaults(func=cmd_geocode)
 
     args = p.parse_args()
     args.func(args)

@@ -117,13 +117,36 @@ python3 -m pipeline.run collect --gdelt en,hi --timespan 1d         # GDELT net
 
 ---
 
-## Phases 4–10 (per spec §11)
+## Phase 4 — Geocoding ✅ (live-verified)
+
+**What it builds**
+- `pipeline/processing/geocode.py` — most-specific-first ladder (§7.4): coords-in-text
+  0.95 → full location string 0.80 → **leading landmark segment + district/state 0.80**
+  → trimmed/road+city 0.70 → city centroid 0.50 → district centroid 0.40. Every result
+  sanity-checked against the India bbox and the expected state (homonym guard).
+  Nominatim (free, 1 req/s etiquette, contact UA) + persistent file cache;
+  Mapbox drops in behind the same interface when the token lands.
+- `pipeline/run.py geocode [--limit N]` — fills `geom`/`geocode_confidence`/
+  `geocode_method` (PostGIS `ST_GeogFromText` in DB mode).
+
+**Live verification (10 incidents)**
+- 10/10 resolved. Distribution: landmark 0.8 ×2 · road 0.7 ×5 · city 0.5 ×1 ·
+  district-centroid 0.4 ×2.
+- Spot-checks: Garware bridge → JM Road, Pune (exact); Narkatiaganj (exact town);
+  **Nashik Phata → the actual junction in Pimpri-Chinchwad** (the landmark-first variant
+  fixed a 50 km road-level miss found during testing).
+- Honesty holds: unresolvable spots land at 0.4 centroid — below the 0.6 publish gate,
+  exactly as designed.
+
+---
+
+## Phases 5–10 (per spec §11)
 
 | Phase | What | Status |
 |---|---|---|
 | 2 | Ingestion: Google News RSS (district×keyword×language) + GDELT + outlets | ✅ code + live-verified |
 | 3 | LLM relevance + forced-JSON extraction | ✅ code + live-verified |
-| 4 | Geocoding (most-specific-first, confidence-scored) | pending |
+| 4 | Geocoding (most-specific-first, confidence-scored) | ✅ code + live-verified |
 | 5 | Article→incident dedup + PostGIS DBSCAN hotspots | pending |
 | 6 | Priority engine + nightly recompute | pending |
 | 7 | Confidence gate + review queue UI | pending |
