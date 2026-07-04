@@ -17,10 +17,52 @@ ARTICLE_FIELDS = ["url", "outlet_name", "outlet_tier", "language", "state", "dis
                   "processing_status"]
 
 
+INCIDENT_FIELDS = ["crash_date", "crash_time", "location_text_raw", "location_text_best",
+                   "road_name", "road_type", "admin_state", "admin_district", "admin_city",
+                   "admin_ward", "fatalities", "injuries", "vehicles_involved",
+                   "victim_types", "narrative_summary", "infra_implicated",
+                   "extraction_confidence", "primary_source_id"]
+
+
 class DBStore:
     def __init__(self):
         from pipeline.db import connect
         self.conn = connect()
+
+    def articles_by_status(self, status: str, limit: int = 100) -> list[dict]:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """select id, url, outlet_name, language, state, district, clean_text
+                   from source_article where processing_status = %s
+                   order by id limit %s""", (status, limit))
+            cols = [d.name for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    def set_article_status(self, article_id, status: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute("update source_article set processing_status=%s where id=%s",
+                        (status, article_id))
+        self.conn.commit()
+
+    def insert_incident(self, inc: dict, defects: list[dict], article_id) -> int:
+        cols = ", ".join(INCIDENT_FIELDS)
+        ph = ", ".join(["%s"] * len(INCIDENT_FIELDS))
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"insert into incident ({cols}) values ({ph}) returning id",
+                tuple(inc.get(f) for f in INCIDENT_FIELDS))
+            iid = cur.fetchone()[0]
+            for d in defects:
+                cur.execute(
+                    """insert into incident_defect
+                       (incident_id, defect_type, defect_confidence, evidence_snippet, evidence_source_id)
+                       values (%s,%s,%s,%s,%s)""",
+                    (iid, d["defect_type"], d["confidence"], d["evidence_snippet"], article_id))
+            cur.execute(
+                """insert into incident_source (incident_id, source_article_id, match_confidence)
+                   values (%s,%s,1.0) on conflict do nothing""", (iid, article_id))
+        self.conn.commit()
+        return iid
 
     def seen_url(self, url: str) -> bool:
         with self.conn.cursor() as cur:
@@ -71,6 +113,40 @@ class JsonlStore:
         if self.path.exists():
             self._rows = [json.loads(l) for l in self.path.read_text().splitlines() if l]
         self._urls = {r["url"] for r in self._rows}
+
+    def articles_by_status(self, status: str, limit: int = 100) -> list[dict]:
+        out = []
+        for r in self._rows:
+            if r.get("processing_status") == status:
+                rec = dict(r)
+                raw = self.raw_dir / f"{r['id']}.html"
+                rec.setdefault("clean_text", rec.get("clean_text"))
+                out.append(rec)
+            if len(out) >= limit:
+                break
+        return out
+
+    def set_article_status(self, article_id, status: str) -> None:
+        for r in self._rows:
+            if r["id"] == article_id:
+                r["processing_status"] = status
+        self._flush()
+
+    def insert_incident(self, inc: dict, defects: list[dict], article_id) -> int:
+        path = self.data_dir / "incident.jsonl"
+        rows = [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+        rec = {f: inc.get(f) for f in INCIDENT_FIELDS}
+        rec["id"] = len(rows) + 1
+        rec["defects"] = defects
+        rec["source_article_ids"] = [article_id]
+        with open(path, "a") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        return rec["id"]
+
+    def _flush(self) -> None:
+        with open(self.path, "w") as f:
+            for r in self._rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
     def seen_url(self, url: str) -> bool:
         return url in self._urls

@@ -117,6 +117,59 @@ def cmd_collect(args) -> None:
         store.close()
 
 
+def cmd_process(args) -> None:
+    """Phase 3: fetched -> relevance -> extraction -> incident."""
+    from pipeline.processing import extract as ex
+    from pipeline.processing import relevance as rel
+    store = get_store(force_jsonl=args.jsonl)
+    try:
+        arts = store.articles_by_status("fetched", limit=args.limit)
+        print(f"processing {len(arts)} fetched article(s)…")
+        stats = {"irrelevant": 0, "extracted": 0, "failed": 0, "snippets_dropped": 0}
+        for a in arts:
+            text = a.get("clean_text") or ""
+            if not text.strip():
+                store.set_article_status(a["id"], "failed")
+                stats["failed"] += 1
+                continue
+            title = text.split("\n", 1)[0][:140]
+            try:
+                cls = rel.classify(title, text)
+            except Exception as e:
+                print(f"  WARN relevance failed #{a['id']}: {e}")
+                stats["failed"] += 1
+                continue
+            if not cls.get("in_scope"):
+                store.set_article_status(a["id"], "irrelevant")
+                stats["irrelevant"] += 1
+                print(f"  - irrelevant #{a['id']} ({cls.get('kind')}): {cls.get('reason','')[:60]}")
+                continue
+            try:
+                inc, dropped = ex.extract(title, text)
+            except Exception as e:
+                print(f"  WARN extraction failed #{a['id']}: {e}")
+                store.set_article_status(a["id"], "failed")
+                stats["failed"] += 1
+                continue
+            stats["snippets_dropped"] += len(dropped)
+            if dropped:
+                print(f"    ! dropped non-verbatim snippets: {dropped}")
+            inc["location_text_raw"] = inc.get("location_text_best")
+            inc["primary_source_id"] = a["id"]
+            defects = inc.pop("defects", [])
+            iid = store.insert_incident(inc, defects, a["id"])
+            store.set_article_status(a["id"], "extracted")
+            stats["extracted"] += 1
+            dstr = ",".join(d["defect_type"] for d in defects) or "-"
+            print(f"  + incident #{iid} <- art #{a['id']} [{cls.get('kind')}] "
+                  f"F{inc['fatalities']}/I{inc['injuries']} conf={inc['extraction_confidence']:.2f} "
+                  f"infra={inc['infra_implicated']} defects={dstr}")
+            print(f"      loc: {inc.get('location_text_best','')[:90]}")
+        print(f"\nDONE {stats}")
+    finally:
+        store.close()
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="pipeline.run")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -132,6 +185,12 @@ def main() -> None:
     c.add_argument("--no-fetch", action="store_true", help="list/insert URLs, skip body fetch")
     c.add_argument("--jsonl", action="store_true", help="force file storage (no DB)")
     c.set_defaults(func=cmd_collect)
+
+    pr = sub.add_parser("process", help="Phase 3: relevance + extraction")
+    pr.add_argument("--limit", type=int, default=50)
+    pr.add_argument("--jsonl", action="store_true", help="force file storage (no DB)")
+    pr.set_defaults(func=cmd_process)
+
     args = p.parse_args()
     args.func(args)
 

@@ -89,12 +89,40 @@ python3 -m pipeline.run collect --gdelt en,hi --timespan 1d         # GDELT net
 
 ---
 
-## Phases 3–10 (per spec §11)
+## Phase 3 — Relevance + structured extraction ✅ (live-verified)
+
+**What it builds**
+- `pipeline/processing/relevance.py` — Haiku 4.5 tool-forced classifier: specific Indian
+  road crash OR road-infra defect/hazard → in scope; crime/suicide/weather/politics → out.
+- `pipeline/processing/extract.py` — Sonnet 5 tool-forced extraction to the full §7.3
+  schema. **Taxonomy locked by JSON-schema enum** (free-text defects impossible).
+  Post-validation: evidence snippets must be **verbatim substrings** of the article
+  (non-verbatim → dropped + logged), defect types deduped,
+  `no_infrastructure_defect_identified` cannot co-exist with real defects,
+  `infra_implicated` recomputed if defects drop. Translation folded into the call
+  (stated Phase-0 deviation) — English fields out, original-language snippets kept.
+- `pipeline/run.py process --limit N` — fetched → relevant/irrelevant → extracted/failed.
+- `scripts/eyeball_extractions.py [--n 50] [--infra-only]` — side-by-side article vs
+  extraction QA view (the CLAUDE.md ≥50 sample-check before scaling).
+
+**Live verification (2026-07-04, 15 articles: hi/ta/mr/en)**
+- 10 incidents extracted · 5 correctly rejected (suicide, sexual-assault, flood, crime,
+  a signal-installation story) · 0 non-verbatim snippets.
+- Multilingual: Hindi NH-27 service-road story → 3 defects (potholes, waterlogging,
+  work zone) each with verbatim Hindi evidence, conf 0.85, infra=true. Tamil The-Hindu
+  road-widening plea → 5 defect claims incl. blind curve + untreated blackspot.
+- Honesty checks pass: casualties only when stated; old crash honestly dated 2023 (not
+  faked recent); pure-behaviour crashes set `no_infrastructure_defect_identified` +
+  infra=false — the confidence gate will route conf<0.7 items to review as designed.
+
+---
+
+## Phases 4–10 (per spec §11)
 
 | Phase | What | Status |
 |---|---|---|
 | 2 | Ingestion: Google News RSS (district×keyword×language) + GDELT + outlets | ✅ code + live-verified |
-| 3 | LLM relevance + forced-JSON extraction | pending |
+| 3 | LLM relevance + forced-JSON extraction | ✅ code + live-verified |
 | 4 | Geocoding (most-specific-first, confidence-scored) | pending |
 | 5 | Article→incident dedup + PostGIS DBSCAN hotspots | pending |
 | 6 | Priority engine + nightly recompute | pending |
