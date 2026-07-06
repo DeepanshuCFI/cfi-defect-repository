@@ -287,6 +287,8 @@ def cmd_daily(args) -> None:
         stats["process"] = "done"
         cmd_geocode(argparse.Namespace(limit=1000, jsonl=False))
         stats["geocode"] = "done"
+        from pipeline.processing import auto_review as ar
+        stats["auto_review"] = ar.run()
         cmd_recompute(argparse.Namespace())
         stats["recompute"] = "done"
         from scripts.export_public import main as export_main
@@ -336,7 +338,12 @@ def main() -> None:
                         help="Phase 5+6: dedup -> cluster -> score (the nightly job)")
     rc.set_defaults(func=cmd_recompute)
 
-    dl = sub.add_parser("daily", help="cron: collect->process->geocode->recompute->export")
+    arv = sub.add_parser("autoreview", help="2nd-pass AI adjudication of the review queue")
+    arv.add_argument("--limit", type=int, default=200)
+    arv.set_defaults(func=lambda a: print(__import__('pipeline.processing.auto_review',
+        fromlist=['run']).run(a.limit)))
+
+    dl = sub.add_parser("daily", help="cron: collect->process->geocode->autoreview->recompute->export")
     dl.add_argument("--days", type=int, default=2, help="RSS window (steady-state)")
     dl.set_defaults(func=cmd_daily)
 

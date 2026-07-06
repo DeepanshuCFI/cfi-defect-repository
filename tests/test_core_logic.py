@@ -121,3 +121,28 @@ def test_gate_blocks_other_infrastructure_only():
 def test_reviewer_override_wins():
     ok, why = publishable(0.1, 0.1, False, [], GATE, reviewed_approved=True)
     assert ok and why == "reviewer_approved"
+
+
+# ---------------------------------------------------------------- auto-review policy
+from pipeline.processing.auto_review import decide  # noqa: E402
+
+
+def test_autoreview_publish_needs_conf_and_geocode():
+    v = {"verdict": "confirm_publish", "confidence": 0.9}
+    assert decide(v, 0.7) == "auto_published"
+    assert decide(v, 0.4) is None                    # geocode gate never overridden
+    assert decide({"verdict": "confirm_publish", "confidence": 0.6}, 0.9) is None
+
+
+def test_autoreview_reject_threshold():
+    assert decide({"verdict": "confirm_reject", "confidence": 0.9}, None) == "rejected"
+    assert decide({"verdict": "confirm_reject", "confidence": 0.7}, None) is None
+
+
+def test_autoreview_crash_only():
+    assert decide({"verdict": "crash_only_ok", "confidence": 0.8}, 0.4) == "machine_ok"
+    assert decide({"verdict": "crash_only_ok", "confidence": 0.5}, 0.9) is None
+
+
+def test_autoreview_needs_human_never_acts():
+    assert decide({"verdict": "needs_human", "confidence": 0.99}, 0.9) is None
