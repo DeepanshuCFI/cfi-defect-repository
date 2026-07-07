@@ -42,7 +42,7 @@ export default function App() {
   }, [data, filters])
 
   if (!data) return (
-    <div className="h-screen grid place-items-center text-muted">Loading registry…</div>
+    <div className="h-screen grid place-items-center text-muted-foreground">Loading registry…</div>
   )
 
   const { meta } = data
@@ -57,19 +57,21 @@ export default function App() {
   return (
     <div className="h-screen flex flex-col">
       {/* top bar */}
-      <header className="border-b border-line bg-white z-20">
-        <div className="px-5 h-14 flex items-center justify-between gap-4">
-          <div className="flex items-baseline gap-3 min-w-0">
-            <span className="font-heading font-bold text-brand text-[16px] whitespace-nowrap">
+      <header className="border-b border-border bg-white z-20">
+        <div className="px-5 h-16 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0">
+            {/* brand rule: logo min-width 180px — below sm we show the text title only */}
+            <img src="cfi-logo.svg" alt="Crashfree India" className="h-9 w-auto shrink-0 hidden sm:block" />
+            <span className="h-6 w-px bg-border shrink-0 hidden sm:block" aria-hidden="true" />
+            <span className="font-heading font-bold text-brand text-[15px] truncate">
               Road Infrastructure Defect Repository
             </span>
-            <span className="text-muted text-xs whitespace-nowrap hidden sm:inline">by Crashfree India</span>
           </div>
           <nav className="flex gap-1 no-print">
             {['map', 'rankings', 'method'].map(t => (
               <button key={t} onClick={() => setTab(t)}
-                className={`px-4 py-1.5 rounded-full text-[13px] capitalize cursor-pointer
-                  ${tab === t ? 'bg-brand text-white' : 'text-muted hover:text-ink'}`}>
+                className={`h-11 px-4 rounded-full text-[13px] capitalize cursor-pointer
+                  ${tab === t ? 'bg-brand text-white' : 'text-muted-foreground hover:text-foreground'}`}>
                 {t}
               </button>
             ))}
@@ -78,7 +80,7 @@ export default function App() {
       </header>
 
       {/* disclaimer ribbon */}
-      <div className="bg-brand-soft border-b border-line px-5 py-1.5 text-[12px] text-muted">
+      <div className="bg-brand-soft border-b border-border px-5 py-1.5 text-[12px] text-muted-foreground">
         <b className="text-warn font-heading text-[10.5px] tracking-widest">AS REPORTED&nbsp;·&nbsp;</b>
         Defects are as reported in news media; locations are indicative pending physical audit.
         Every entry links its sources. Absence of data is absence of coverage — never a safety clearance.
@@ -87,8 +89,8 @@ export default function App() {
       {tab === 'map' && (
         <div className="flex-1 flex min-h-0">
           {/* left panel */}
-          <aside className="w-72 border-r border-line bg-white flex flex-col no-print">
-            <div className="p-4 border-b border-line grid grid-cols-2 gap-2">
+          <aside className="w-72 border-r border-border bg-white flex flex-col no-print">
+            <div className="p-4 border-b border-border grid grid-cols-2 gap-2">
               <Stat n={filtered.length} l="hotspots shown" />
               <Stat n={meta.incidents} l="public incidents" />
               <Stat n={meta.fatalities} l="deaths on record" red />
@@ -105,27 +107,27 @@ export default function App() {
                 options={defectsInData} labels={meta.defect_labels} />
               <Select label="Priority tier" value={filters.tier} onChange={v => sel('tier', v)}
                 options={['critical', 'high', 'medium', 'watch']} labels={TIER_LABEL} />
-              <label className="flex items-center gap-2 mt-1 cursor-pointer text-muted">
+              <label className="flex items-center gap-2 mt-1 cursor-pointer text-muted-foreground">
                 <input type="checkbox" checked={filters.repeatOnly}
-                  onChange={e => sel('repeatOnly', e.target.checked)} className="accent-[#F10015]" />
+                  onChange={e => sel('repeatOnly', e.target.checked)} className="accent-danger" />
                 Repeat hotspots only (2+ crashes)
               </label>
-              <label className="flex items-center gap-2 cursor-pointer text-muted">
+              <label className="flex items-center gap-2 cursor-pointer text-muted-foreground">
                 <input type="checkbox" checked={heat} onChange={e => setHeat(e.target.checked)}
-                  className="accent-[#4A35FF]" />
+                  className="accent-brand" />
                 Heat layer
               </label>
-              <div className="mt-3 pt-3 border-t border-line">
-                <div className="font-heading text-[10px] tracking-[0.2em] text-muted mb-2">PRIORITY TIERS</div>
+              <div className="mt-3 pt-3 border-t border-border">
+                <div className="font-heading text-[10px] tracking-[0.2em] text-muted-foreground mb-2">PRIORITY TIERS</div>
                 {Object.entries(TIER_COLOR).map(([t, c]) => (
-                  <div key={t} className="flex items-center gap-2 text-[12px] text-muted py-0.5">
+                  <div key={t} className="flex items-center gap-2 text-[12px] text-muted-foreground py-0.5">
                     <span className="w-3 h-3 rounded-full" style={{ background: c }} />
                     {TIER_LABEL[t]}
                   </div>
                 ))}
               </div>
             </div>
-            <div className="mt-auto p-4 text-[11px] text-muted border-t border-line">
+            <div className="mt-auto p-4 text-[11px] text-muted-foreground border-t border-border">
               Updated {new Date(meta.generated_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} · {meta.hotspots} hotspots on record
             </div>
           </aside>
@@ -156,9 +158,9 @@ export default function App() {
 
 function Stat({ n, l, red }) {
   return (
-    <div className="rounded-xl border border-line p-2.5">
+    <div className="rounded-xl border border-border p-2.5">
       <div className={`font-heading font-bold text-xl ${red ? 'text-danger' : 'text-brand'}`}>{n}</div>
-      <div className="text-[11px] text-muted leading-tight mt-0.5">{l}</div>
+      <div className="text-[11px] text-muted-foreground leading-tight mt-0.5">{l}</div>
     </div>
   )
 }
@@ -166,9 +168,9 @@ function Stat({ n, l, red }) {
 function Select({ label, value, onChange, options, labels }) {
   return (
     <label className="block">
-      <span className="font-heading text-[10px] tracking-[0.2em] text-muted">{label.toUpperCase()}</span>
+      <span className="font-heading text-[10px] tracking-[0.2em] text-muted-foreground">{label.toUpperCase()}</span>
       <select value={value} onChange={e => onChange(e.target.value)}
-        className="mt-1 w-full border border-line rounded-lg px-2.5 py-1.5 bg-white text-[13px]">
+        className="mt-1 w-full border border-border rounded-lg px-2.5 py-1.5 bg-white text-[13px]">
         <option value="">All</option>
         {options.map(o => <option key={o} value={o}>{labels?.[o] || o}</option>)}
       </select>
@@ -178,10 +180,10 @@ function Select({ label, value, onChange, options, labels }) {
 
 function Method({ meta }) {
   const Item = ({ k, t, children }) => (
-    <div className="rounded-2xl border border-line p-6">
+    <div className="rounded-2xl border border-border p-6">
       <div className="font-heading text-[10.5px] tracking-[0.2em] text-brand">{k}</div>
       <h3 className="font-heading font-bold mt-1.5">{t}</h3>
-      <p className="text-[13.5px] text-muted mt-2 leading-relaxed">{children}</p>
+      <p className="text-[13.5px] text-muted-foreground mt-2 leading-relaxed">{children}</p>
     </div>
   )
   return (
@@ -219,7 +221,7 @@ function Method({ meta }) {
             disputed entries are withdrawn from the public view while checked.
           </Item>
         </div>
-        <p className="text-[12px] text-muted mt-8">
+        <p className="text-[12px] text-muted-foreground mt-8">
           Registry generated {new Date(meta.generated_at).toLocaleString('en-IN')} ·
           {' '}{meta.hotspots} hotspots · {meta.incidents} incidents · Crashfree India (Vision Zero Trust)
         </p>

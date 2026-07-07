@@ -7,22 +7,22 @@
   --color-brand-soft: #F8F7FF;
   --color-danger: #F10015;
   --color-warn: #F57C00;
-  --color-ok: #00AA44;
-  --color-ink: #1a1c1c;
-  --color-muted: #777589;
-  --color-line: #EDEEF2;
+  --color-success: #00AA44;
+  --color-foreground: #1a1c1c;
+  --color-muted-foreground: #777589;
+  --color-border: #EDEEF2;
   --font-heading: "Montserrat", system-ui, sans-serif;
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  color: var(--color-ink);
+  font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  color: var(--color-foreground);
   -webkit-font-smoothing: antialiased;
 }
 
 .maplibregl-popup-content {
   border-radius: 10px;
-  border: 1px solid var(--color-line);
+  border: 1px solid var(--color-border);
   box-shadow: 0 8px 24px rgb(74 53 255 / 0.12);
   font-size: 12.5px;
   padding: 10px 14px;

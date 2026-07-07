@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Flag } from 'lucide-react'
 
 export default function Rankings({ features, meta, tierColor, tierText, tierLabel, onOpen }) {
   const [state, setState] = useState('')
@@ -38,24 +39,24 @@ export default function Rankings({ features, meta, tierColor, tierText, tierLabe
           </div>
           <div className="flex gap-2 no-print">
             <select value={state} onChange={e => setState(e.target.value)}
-              className="border border-line rounded-full px-4 py-2 bg-white text-[13px]">
+              className="h-11 border border-border rounded-full px-4 bg-white text-[13px]">
               <option value="">All India</option>
               {meta.states.map(s => <option key={s}>{s}</option>)}
             </select>
             <button onClick={csv}
-              className="px-5 py-2 rounded-full bg-brand text-white text-[13px] cursor-pointer hover:bg-brand/90">
+              className="h-11 px-6 rounded-full bg-brand text-white text-[13px] cursor-pointer shadow-lg shadow-brand/30 hover:bg-brand/90">
               Export evidence pack (CSV)
             </button>
             <button onClick={() => window.print()}
-              className="px-5 py-2 rounded-full border border-line bg-white text-[13px] cursor-pointer">
+              className="h-11 px-6 rounded-full border border-border bg-white text-[13px] cursor-pointer">
               Print / PDF
             </button>
           </div>
         </div>
 
-        <div className="mt-6 bg-white border border-line rounded-2xl overflow-hidden">
+        <div className="mt-6 bg-white border border-border rounded-2xl overflow-hidden">
           <div className="grid grid-cols-[3rem_1fr_7rem_5rem_5rem_5rem] gap-2 px-5 py-2.5 bg-brand-soft
-                          border-b border-line font-heading text-[10px] tracking-[0.15em] text-muted">
+                          border-b border-border font-heading text-[10px] tracking-[0.15em] text-muted-foreground">
             <span>#</span><span>LOCATION</span><span>PRIORITY</span>
             <span>CRASHES</span><span>DEATHS</span><span>INJURIES</span>
           </div>
@@ -64,14 +65,14 @@ export default function Rankings({ features, meta, tierColor, tierText, tierLabe
             return (
               <button key={p.id} onClick={() => onOpen(f)}
                 className="grid grid-cols-[3rem_1fr_7rem_5rem_5rem_5rem] gap-2 px-5 py-3 w-full text-left
-                           border-b border-line last:border-0 hover:bg-brand-soft cursor-pointer items-center">
-                <span className="font-heading font-bold text-muted">{ix + 1}</span>
+                           border-b border-border last:border-0 hover:bg-brand-soft cursor-pointer items-center">
+                <span className="font-heading font-bold text-muted-foreground">{ix + 1}</span>
                 <span className="min-w-0">
                   <span className="font-heading font-semibold text-[13.5px] block truncate">
                     {p.road_name || 'Unnamed stretch'}
-                    {p.escalation && <span className="text-danger font-bold"> ⚑</span>}
+                    {p.escalation && <Flag className="inline h-3.5 w-3.5 text-danger ml-1 align-[-2px]" />}
                   </span>
-                  <span className="text-[12px] text-muted block truncate">
+                  <span className="text-[12px] text-muted-foreground block truncate">
                     {[p.district, p.state].filter(Boolean).join(', ')}
                     {(p.defects || []).length > 0 &&
                       ' · ' + p.defects.map(d => meta.defect_labels[d] || d).join(', ')}
@@ -90,10 +91,10 @@ export default function Rankings({ features, meta, tierColor, tierText, tierLabe
             )
           })}
         </div>
-        <p className="text-[11.5px] text-muted mt-4">
+        <p className="text-[11.5px] text-muted-foreground mt-4">
           Ranked by transparent priority score (casualties · frequency · recency · vulnerable users ·
-          defect severity · evidence). ⚑ = ≥3 crashes in 6 months. Click a row for the full dossier
-          with sources. CSV includes coordinates for GIS use.
+          defect severity · evidence). <Flag className="inline h-3 w-3 text-danger align-[-1px]" /> = ≥3 crashes
+          in 6 months. Click a row for the full dossier with sources. CSV includes coordinates for GIS use.
         </p>
       </div>
     </div>
