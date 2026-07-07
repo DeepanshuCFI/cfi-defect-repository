@@ -12,7 +12,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 330    # 3 states (BR+UP+RJ, 146 districts) — collect alone can take ~2h
     steps:
       - uses: actions/checkout@v4
 
@@ -23,6 +23,11 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Sync configs to DB (git config/ is the source of truth)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scripts/load_configs.py
 
       - name: Run daily pipeline (collect -> process -> geocode -> recompute -> export)
         env:

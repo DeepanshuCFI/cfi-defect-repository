@@ -54,6 +54,7 @@
       "simhash_hamming_max": 6
     },
     "ingestion": {
+      "daily_states": ["Bihar", "Uttar Pradesh", "Rajasthan"],
       "national_share_cap": 0.1,
       "rss_results_per_query": 30,
       "fetch_timeout_s": 30,
