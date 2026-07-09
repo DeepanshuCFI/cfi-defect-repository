@@ -83,15 +83,23 @@ class DBStore:
             cur.execute("select 1 from source_article where url=%s", (url,))
             return cur.fetchone() is not None
 
-    def near_duplicate(self, dedup_hash: str, hamming_max: int = 6) -> bool:
+    def near_duplicate(self, dedup_hash: str, district=None, state=None,
+                       hamming_max: int = 3, window_days: int = 7) -> bool:
         if not dedup_hash:
             return False
-        from pipeline.fetch import hamming
+        from pipeline.fetch import is_content_duplicate
+        # Scope candidates to the SAME district (fallback: same state). Without this,
+        # short vernacular defect stories collapse across unrelated districts/states.
+        where = ["dedup_hash is not null", "dedup_hash != ''",
+                 "fetched_at > now() - make_interval(days => %s)"]
+        params: list = [window_days]
+        if district:
+            where.append("district = %s"); params.append(district)
+        elif state:
+            where.append("state = %s"); params.append(state)
         with self.conn.cursor() as cur:
-            cur.execute("""select dedup_hash from source_article
-                           where dedup_hash is not null and dedup_hash != ''
-                             and fetched_at > now() - interval '14 days'""")
-            return any(hamming(dedup_hash, h) <= hamming_max for (h,) in cur.fetchall())
+            cur.execute("select dedup_hash from source_article where " + " and ".join(where), params)
+            return is_content_duplicate(dedup_hash, (h for (h,) in cur.fetchall()), hamming_max)
 
     def insert_article(self, a: dict):
         cols = ", ".join(ARTICLE_FIELDS)
@@ -165,12 +173,17 @@ class JsonlStore:
     def seen_url(self, url: str) -> bool:
         return url in self._urls
 
-    def near_duplicate(self, dedup_hash: str, hamming_max: int = 6) -> bool:
+    def near_duplicate(self, dedup_hash: str, district=None, state=None,
+                       hamming_max: int = 3, window_days: int = 7) -> bool:
         if not dedup_hash:
             return False
-        from pipeline.fetch import hamming
-        return any(r.get("dedup_hash") and hamming(dedup_hash, r["dedup_hash"]) <= hamming_max
-                   for r in self._rows)
+        from pipeline.fetch import is_content_duplicate
+        scoped = self._rows
+        if district:
+            scoped = [r for r in scoped if r.get("district") == district]
+        elif state:
+            scoped = [r for r in scoped if r.get("state") == state]
+        return is_content_duplicate(dedup_hash, (r.get("dedup_hash") for r in scoped), hamming_max)
 
     def insert_article(self, a: dict):
         if a["url"] in self._urls:

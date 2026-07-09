@@ -93,6 +93,18 @@ def hamming(h1: str, h2: str) -> int:
     return bin(int(h1, 16) ^ int(h2, 16)).count("1")
 
 
+def is_content_duplicate(cand_hash: str, existing_hashes, hamming_max: int = 3) -> bool:
+    """Pure, unit-tested content-dedup decision. `existing_hashes` MUST already be
+    scoped to the same locality (district) by the caller — a 64-bit simhash of a short
+    vernacular defect story shares too much vocabulary across unrelated districts, so a
+    global compare collapses distinct stories (e.g. a Pilibhit street-light report onto a
+    Chittorgarh hospital report at Hamming 6). Locality scope + a tight threshold prevent
+    that; genuine re-reports of the same story land at Hamming 0–2."""
+    if not cand_hash:
+        return False
+    return any(h and hamming(cand_hash, h) <= hamming_max for h in existing_hashes)
+
+
 def fetch_article(url: str, delay_s: float = 2.0, timeout: int = 30) -> Fetched:
     if not robots_allowed(url):
         return Fetched(url, 0, "", "", "", None, None, blocked_by_robots=True)

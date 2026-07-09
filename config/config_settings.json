@@ -51,7 +51,7 @@
     "dedup": {
       "date_window_days": 1,
       "spatial_window_m": 1000,
-      "simhash_hamming_max": 6
+      "simhash_hamming_max": 3
     },
     "ingestion": {
       "daily_states": ["Bihar", "Uttar Pradesh", "Rajasthan"],

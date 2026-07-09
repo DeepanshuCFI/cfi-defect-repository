@@ -32,6 +32,8 @@ def tier_for(domain: str | None) -> str:
 
 def collect_district(d: dict, store, args) -> dict:
     kw = configload.keywords()
+    dcfg = configload.settings().get("dedup", {})
+    ham_max = dcfg.get("simhash_hamming_max", 3)
     stats = {"queries": 0, "items": 0, "new": 0, "dup_url": 0, "near_dup": 0,
              "robots": 0, "errors": 0}
     for query, lang in rss.build_queries(d, kw, max_lang_terms=args.lang_terms):
@@ -59,7 +61,9 @@ def collect_district(d: dict, store, args) -> dict:
                     if f.blocked_by_robots:
                         stats["robots"] += 1
                         continue
-                    if f.clean_text and store.near_duplicate(f.dedup_hash):
+                    if f.clean_text and store.near_duplicate(
+                            f.dedup_hash, district=d["district"], state=d["state"],
+                            hamming_max=ham_max):
                         row["processing_status"] = "near_duplicate"
                         stats["near_dup"] += 1
                     else:

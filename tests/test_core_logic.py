@@ -9,6 +9,7 @@ from datetime import date
 from pipeline.processing.dedup import is_same_crash
 from pipeline.processing.gate import publishable
 from pipeline.processing.score import components, tier, total_score
+from pipeline.fetch import is_content_duplicate
 
 GATE = {"extraction_confidence_min": 0.7, "geocode_confidence_min": 0.6,
         "require_infra_implicated": True}
@@ -18,6 +19,32 @@ WEIGHTS = {"w1_fatalities_weighted": 0.30, "w2_crash_frequency": 0.25, "w3_recen
            "w4_vulnerable_user_share": 0.15, "w5_defect_severity": 0.10,
            "w6_evidence_strength": 0.05}
 TIERS = {"critical": 75, "high": 50, "medium": 25, "watch": 0}
+
+
+# ---------------------------------------------------------------- content dedup (ingest)
+# Real simhashes from production (2026-07-09): distinct-location defect stories that the
+# old global Hamming<=6 rule wrongly collapsed. Marauri street-light (Pilibhit) sits at
+# Hamming 6 from a Chittorgarh hospital story and 5 from Kota/Pratapgarh crashes.
+H_MARAURI = "6d20e41c77ea5e12"      # Pilibhit street lights out on NH
+H_CHITTORGARH = "6d20e49d27ea5f1a"  # unrelated hospital story, Hamming 6 from Marauri
+H_KOTA = "6f20e49d67ea5f12"         # NH-27 crash, Hamming 5 from Marauri
+
+
+def test_content_dup_exact_rereport():
+    # genuine re-report (Hamming 0) is still a duplicate
+    assert is_content_duplicate(H_MARAURI, [H_MARAURI], hamming_max=3)
+
+
+def test_content_dup_tight_threshold_rejects_distinct_stories():
+    # the production false-positive cluster: distinct stories at Hamming 5-6 must NOT
+    # dedupe at the new threshold of 3 (old threshold of 6 wrongly collapsed them)
+    assert not is_content_duplicate(H_MARAURI, [H_KOTA, H_CHITTORGARH], hamming_max=3)
+    assert is_content_duplicate(H_MARAURI, [H_KOTA, H_CHITTORGARH], hamming_max=6)  # old bug
+
+
+def test_content_dup_empty_hash_never_matches():
+    assert not is_content_duplicate("", [H_MARAURI], hamming_max=3)
+    assert not is_content_duplicate(H_MARAURI, [""], hamming_max=3)
 
 
 # ---------------------------------------------------------------- dedup
