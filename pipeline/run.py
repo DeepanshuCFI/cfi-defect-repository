@@ -246,6 +246,47 @@ def cmd_geocode(args) -> None:
                 print(f"  #{iid} {g['geocode_method'] or 'UNRESOLVED'} "
                       f"conf={g['geocode_confidence']} {(g['display_name'] or '')[:70]}")
             conn.commit()
+
+            # RESCUE PASS (Mapbox only): re-geocode queue items stuck below the 0.6
+            # publish bar. Improvements update in place; items crossing the bar flip
+            # needs_human -> auto so the auto-reviewer re-judges them once — this is
+            # how the geocode-blocked queue melts without humans.
+            from pipeline.settings import MAPBOX_TOKEN
+            if MAPBOX_TOKEN:
+                cur.execute("""
+                  select id, location_text_best, road_name, admin_city,
+                         admin_district, admin_state, geocode_confidence,
+                         verification_status
+                  from incident
+                  where verification_status in ('auto','needs_human')
+                    and (geocode_confidence is null or geocode_confidence < 0.6)
+                  limit %s""", (args.limit,))
+                rescue = cur.fetchall()
+                print(f"\nrescue pass: re-geocoding {len(rescue)} low-confidence item(s)…")
+                saved = 0
+                for iid, loc, road, city, distr, state, old_conf, status in rescue:
+                    g = geo(loc or "", road, city, distr, state)
+                    if g["lat"] is None or (g["geocode_confidence"] or 0) <= (old_conf or 0):
+                        continue
+                    cur.execute(
+                        """update incident set geom=ST_GeogFromText(%s),
+                           geocode_confidence=%s, geocode_method=%s where id=%s""",
+                        (f"POINT({g['lon']} {g['lat']})", g["geocode_confidence"],
+                         g["geocode_method"], iid))
+                    if g["geocode_confidence"] >= 0.6 and status == "needs_human":
+                        cur.execute("update incident set verification_status='auto' "
+                                    "where id=%s", (iid,))
+                        cur.execute("""insert into review_action (entity_type, entity_id,
+                                       reviewer, action, note) values
+                                       ('incident',%s,'pipeline:rule','edit',%s)""",
+                                    (iid, f"geocode improved {old_conf} -> "
+                                          f"{g['geocode_confidence']} (mapbox rescue); "
+                                          "requeued for auto-review"))
+                    saved += 1
+                    print(f"  rescued #{iid}: {old_conf} -> {g['geocode_confidence']} "
+                          f"({g['geocode_method']})")
+                conn.commit()
+                print(f"rescue pass: {saved} improved")
     else:
         path = ROOT / "data" / "incident.jsonl"
         rows = [_json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []

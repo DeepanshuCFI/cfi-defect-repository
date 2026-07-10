@@ -9,8 +9,10 @@ Ladder (first hit wins, sanity-checked against India bbox and expected state):
   6. district + state centroid                           -> 0.40 district_centroid
 Centroid-level results are low-confidence by design and never publish publicly (§8).
 
-Provider: Nominatim (free, 1 req/s etiquette, UA with contact) with a persistent
-file cache; Mapbox slots in later behind the same interface when the token lands.
+Providers: Mapbox (primary when MAPBOX_TOKEN is set — far stronger on Indic
+village/tehsil text) falling back to Nominatim (free, 1 req/s etiquette), both behind
+a persistent file cache. Mapbox cache keys are namespaced "mb|" so stale Nominatim
+misses (cached None) never mask a Mapbox hit.
 """
 import json
 import re
@@ -19,9 +21,10 @@ from pathlib import Path
 
 import httpx
 
-from pipeline.settings import ROOT
+from pipeline.settings import MAPBOX_TOKEN, ROOT
 
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
+MAPBOX = "https://api.mapbox.com/search/geocode/v6/forward"
 UA = "CrashfreeIndia-DefectRepo/0.1 (road-safety research; contact: deepanshu@crashfreeindia.org)"
 CACHE_PATH = ROOT / "data" / "geocode_cache.json"
 INDIA_BBOX = (6.0, 68.0, 37.6, 97.5)   # lat_min, lon_min, lat_max, lon_max
@@ -72,15 +75,64 @@ def _nominatim(query: str) -> dict | None:
     return result
 
 
+_last_mb_call = 0.0
+
+
+def _mapbox(query: str) -> dict | None:
+    """Normalized {lat, lon, state, display} via Mapbox forward geocoding, or None."""
+    cache = _load_cache()
+    key = "mb|" + re.sub(r"\s+", " ", query.strip().lower())
+    if key in cache:
+        return cache[key]
+    global _last_mb_call
+    wait = _last_mb_call + 0.12 - time.time()   # stay far under the 600/min limit
+    if wait > 0:
+        time.sleep(wait)
+    _last_mb_call = time.time()
+    result = None
+    try:
+        r = httpx.get(MAPBOX, params={
+            "q": query, "country": "IN", "limit": 1, "language": "en",
+            "access_token": MAPBOX_TOKEN}, timeout=20)
+        feats = (r.json() or {}).get("features", []) if r.status_code == 200 else []
+        if feats:
+            f = feats[0]
+            lon, lat = f["geometry"]["coordinates"]
+            props = f.get("properties", {})
+            result = {"lat": float(lat), "lon": float(lon),
+                      "state": ((props.get("context", {}).get("region") or {})
+                                .get("name") or ""),
+                      "display": (props.get("full_address") or "")[:160]}
+    except Exception:
+        result = None
+    cache[key] = result
+    _save_cache()
+    return result
+
+
+def _resolve(query: str) -> dict | None:
+    """Provider ladder: Mapbox first (if token), Nominatim fallback. Normalized shape."""
+    if MAPBOX_TOKEN:
+        hit = _mapbox(query)
+        if hit:
+            return hit
+    hit = _nominatim(query)
+    if hit:
+        return {"lat": float(hit["lat"]), "lon": float(hit["lon"]),
+                "state": (hit.get("address", {}).get("state") or ""),
+                "display": (hit.get("display_name") or "")[:160]}
+    return None
+
+
 def _in_india(lat: float, lon: float) -> bool:
     a, b, c, d = INDIA_BBOX
     return a <= lat <= c and b <= lon <= d
 
 
-def _state_ok(hit: dict, expected_state: str | None) -> bool:
+def _state_ok(got_state: str, expected_state: str | None) -> bool:
     if not expected_state:
         return True
-    got = (hit.get("address", {}).get("state") or "").strip().lower()
+    got = (got_state or "").strip().lower()
     if not got:
         return True
     exp = expected_state.strip().lower()
@@ -142,16 +194,16 @@ def geocode(location_text: str, road_name: str | None = None,
                     "geocode_method": "coords_in_text", "display_name": "coords in text"}
     for query, method, conf in _variants(location_text, road_name, admin_city,
                                          admin_district, admin_state):
-        hit = _nominatim(query)
+        hit = _resolve(query)
         if not hit:
             continue
-        lat, lon = float(hit["lat"]), float(hit["lon"])
+        lat, lon = hit["lat"], hit["lon"]
         if not _in_india(lat, lon):
             continue
-        if not _state_ok(hit, admin_state):
+        if not _state_ok(hit["state"], admin_state):
             continue           # homonym in another state — keep descending the ladder
         return {"lat": lat, "lon": lon, "geocode_confidence": conf,
                 "geocode_method": method,
-                "display_name": hit.get("display_name", "")[:160]}
+                "display_name": hit["display"]}
     return {"lat": None, "lon": None, "geocode_confidence": None,
             "geocode_method": None, "display_name": None}

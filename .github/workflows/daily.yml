@@ -62,6 +62,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}       # session-pooler URL (runners are IPv4-only)
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}   # geocoding primary; empty = Nominatim only
           PYTHONUNBUFFERED: "1"
         run: python -m pipeline.run daily --days 2
 
