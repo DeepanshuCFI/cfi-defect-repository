@@ -24,13 +24,47 @@ INCIDENT_FIELDS = ["crash_date", "crash_time", "location_text_raw", "location_te
                    "extraction_confidence", "primary_source_id"]
 
 
+_NULLISH = {"null", "none", "nil", "na", "n/a", ""}
+
+
+def _clean_nullish(v):
+    """Model outputs sometimes carry the STRING 'null' instead of JSON null — a literal
+    'null' in an integer column killed daily run #9 (2026-07-10). Normalise to None."""
+    if isinstance(v, str) and v.strip().lower() in _NULLISH:
+        return None
+    return v
+
+
+def _to_int(v, default=0):
+    v = _clean_nullish(v)
+    if v is None:
+        return default
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_float(v, default=0.0):
+    v = _clean_nullish(v)
+    if v is None:
+        return default
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def coerce_incident(inc: dict) -> dict:
-    """Fill NOT NULL defaults the model may omit (non-required schema fields)."""
-    inc = dict(inc)
+    """Fill NOT NULL defaults the model may omit and sanitise nullish/stringly-typed
+    values (non-required schema fields)."""
+    inc = {k: _clean_nullish(v) for k, v in inc.items()}
     inc["vehicles_involved"] = inc.get("vehicles_involved") or []
     inc["victim_types"] = inc.get("victim_types") or []
-    inc["fatalities"] = inc.get("fatalities") or 0
-    inc["injuries"] = inc.get("injuries") or 0
+    inc["fatalities"] = _to_int(inc.get("fatalities"))
+    inc["injuries"] = _to_int(inc.get("injuries"))
+    # non-numeric confidence -> 0.0: fails the publish gate, lands in review. Honest.
+    inc["extraction_confidence"] = _to_float(inc.get("extraction_confidence"))
     inc["road_type"] = inc.get("road_type") or "unknown"
     inc["infra_implicated"] = bool(inc.get("infra_implicated"))
     return inc
@@ -61,20 +95,25 @@ class DBStore:
         inc = coerce_incident(inc)
         cols = ", ".join(INCIDENT_FIELDS)
         ph = ", ".join(["%s"] * len(INCIDENT_FIELDS))
-        with self.conn.cursor() as cur:
-            cur.execute(
-                f"insert into incident ({cols}) values ({ph}) returning id",
-                tuple(inc.get(f) for f in INCIDENT_FIELDS))
-            iid = cur.fetchone()[0]
-            for d in defects:
+        try:
+            with self.conn.cursor() as cur:
                 cur.execute(
-                    """insert into incident_defect
-                       (incident_id, defect_type, defect_confidence, evidence_snippet, evidence_source_id)
-                       values (%s,%s,%s,%s,%s)""",
-                    (iid, d["defect_type"], d["confidence"], d["evidence_snippet"], article_id))
-            cur.execute(
-                """insert into incident_source (incident_id, source_article_id, match_confidence)
-                   values (%s,%s,1.0) on conflict do nothing""", (iid, article_id))
+                    f"insert into incident ({cols}) values ({ph}) returning id",
+                    tuple(inc.get(f) for f in INCIDENT_FIELDS))
+                iid = cur.fetchone()[0]
+                for d in defects:
+                    cur.execute(
+                        """insert into incident_defect
+                           (incident_id, defect_type, defect_confidence, evidence_snippet, evidence_source_id)
+                           values (%s,%s,%s,%s,%s)""",
+                        (iid, d["defect_type"], d["confidence"], d["evidence_snippet"], article_id))
+                cur.execute(
+                    """insert into incident_source (incident_id, source_article_id, match_confidence)
+                       values (%s,%s,1.0) on conflict do nothing""", (iid, article_id))
+        except Exception:
+            # leave the shared connection usable for the caller's failure handling
+            self.conn.rollback()
+            raise
         self.conn.commit()
         return iid
 

@@ -179,7 +179,14 @@ def cmd_process(args) -> None:
             inc["location_text_raw"] = inc.get("location_text_best")
             inc["primary_source_id"] = a["id"]
             defects = inc.pop("defects", [])
-            iid = store.insert_incident(inc, defects, a["id"])
+            try:
+                iid = store.insert_incident(inc, defects, a["id"])
+            except Exception as e:
+                # one poisoned extraction must never kill the whole daily run
+                print(f"  WARN insert failed #{a['id']}: {e}")
+                store.set_article_status(a["id"], "failed")
+                stats["failed"] += 1
+                continue
             store.set_article_status(a["id"], "extracted")
             stats["extracted_light" if light else "extracted"] += 1
             dstr = ",".join(d["defect_type"] for d in defects) or "-"

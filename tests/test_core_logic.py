@@ -10,6 +10,7 @@ from pipeline.processing.dedup import is_same_crash
 from pipeline.processing.gate import publishable
 from pipeline.processing.score import components, tier, total_score
 from pipeline.fetch import is_content_duplicate
+from pipeline.store import coerce_incident
 
 GATE = {"extraction_confidence_min": 0.7, "geocode_confidence_min": 0.6,
         "require_infra_implicated": True}
@@ -19,6 +20,28 @@ WEIGHTS = {"w1_fatalities_weighted": 0.30, "w2_crash_frequency": 0.25, "w3_recen
            "w4_vulnerable_user_share": 0.15, "w5_defect_severity": 0.10,
            "w6_evidence_strength": 0.05}
 TIERS = {"critical": 75, "high": 50, "medium": 25, "watch": 0}
+
+
+# ---------------------------------------------------------------- incident coercion
+def test_coerce_stringly_null_casualties():
+    # daily run #9 (2026-07-10) died on injuries="null" (string) hitting an int column
+    inc = coerce_incident({"fatalities": "null", "injuries": "None",
+                           "extraction_confidence": "null"})
+    assert inc["fatalities"] == 0 and inc["injuries"] == 0
+    assert inc["extraction_confidence"] == 0.0   # fails gate -> review queue, honest
+
+
+def test_coerce_numeric_strings_and_real_numbers_survive():
+    inc = coerce_incident({"fatalities": "3", "injuries": 2.0,
+                           "extraction_confidence": "0.85"})
+    assert inc["fatalities"] == 3 and inc["injuries"] == 2
+    assert math.isclose(inc["extraction_confidence"], 0.85)
+
+
+def test_coerce_nullish_text_fields_become_none():
+    inc = coerce_incident({"road_name": "null", "admin_district": " N/A ",
+                           "fatalities": 1, "injuries": 0})
+    assert inc["road_name"] is None and inc["admin_district"] is None
 
 
 # ---------------------------------------------------------------- content dedup (ingest)
