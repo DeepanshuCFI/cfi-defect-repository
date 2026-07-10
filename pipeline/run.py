@@ -200,6 +200,12 @@ def cmd_process(args) -> None:
                 stats["failed"] += 1
                 continue
             store.set_article_status(a["id"], "extracted")
+            if not inc["infra_implicated"]:
+                # crash-only record: keep for the >=3-in-6mo frequency counter, but it
+                # can never publish — no human queue, no paid second-pass adjudication.
+                store.set_incident_status(iid, "machine_ok",
+                    "crash-only at extraction (infra_implicated=false) -> machine_ok; "
+                    "kept for crash-frequency counts")
             stats["extracted_light" if light else "extracted"] += 1
             dstr = ",".join(d["defect_type"] for d in defects) or "-"
             print(f"  + incident #{iid} <- art #{a['id']} [{cls.get('kind')}] "

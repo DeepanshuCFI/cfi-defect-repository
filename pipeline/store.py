@@ -117,6 +117,16 @@ class DBStore:
         self.conn.commit()
         return iid
 
+    def set_incident_status(self, incident_id: int, status: str, note: str) -> None:
+        """Rule-based status routing with an audit trail (reviewer 'pipeline:rule')."""
+        with self.conn.cursor() as cur:
+            cur.execute("update incident set verification_status=%s, updated_at=now() "
+                        "where id=%s", (status, incident_id))
+            cur.execute("""insert into review_action (entity_type, entity_id, reviewer,
+                           action, note) values ('incident',%s,'pipeline:rule','edit',%s)""",
+                        (incident_id, note))
+        self.conn.commit()
+
     def seen_url(self, url: str) -> bool:
         with self.conn.cursor() as cur:
             cur.execute("select 1 from source_article where url=%s", (url,))
@@ -192,6 +202,9 @@ class JsonlStore:
             if r["id"] == article_id:
                 r["processing_status"] = status
         self._flush()
+
+    def set_incident_status(self, incident_id, status: str, note: str) -> None:
+        pass  # no-DB mode keeps incidents append-only; routing is a DB concern
 
     def insert_incident(self, inc: dict, defects: list[dict], article_id) -> int:
         path = self.data_dir / "incident.jsonl"
