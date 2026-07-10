@@ -58,6 +58,8 @@ def classify(title: str | None, text: str) -> dict:
         model=model, max_tokens=200, system=SYSTEM,
         tools=[TOOL], tool_choice={"type": "tool", "name": "record_classification"},
         messages=[{"role": "user", "content": content}])
+    from pipeline import llmcost
+    llmcost.add(model, msg.usage)
     for block in msg.content:
         if block.type == "tool_use":
             return dict(block.input)

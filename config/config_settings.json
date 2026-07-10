@@ -69,7 +69,13 @@
     "processing": {
       "body_prefilter": true,
       "tiered_extraction": true,
-      "skip_pure_crashes": false
+      "skip_pure_crashes": false,
+      "llm_budget_usd_per_run": 2.0
+    },
+    "models_pricing": {
+      "_comment": "USD per million tokens; keep in sync with anthropic.com/pricing",
+      "claude-sonnet-5": { "in": 3.0, "out": 15.0 },
+      "claude-haiku-4-5-20251001": { "in": 1.0, "out": 5.0 }
     }
   }
 }

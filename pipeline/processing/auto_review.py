@@ -120,7 +120,12 @@ def run(limit: int = 200) -> dict:
           where a.clean_text is not null and r.verification_status = 'auto'
           order by r.id limit %s""", (limit,))
         rows = cur.fetchall()
+        from pipeline import llmcost
         for (iid, loc, f, i, infra, ec, gc, summary, text) in rows:
+            if llmcost.over():
+                print(f"  BUDGET STOP in auto-review: ${llmcost.spent():.2f} >= "
+                      f"${llmcost.budget():.2f} — remaining items wait for tomorrow")
+                break
             cur.execute("""select defect_type, evidence_snippet from incident_defect
                            where incident_id=%s""", (iid,))
             defects = "; ".join(f"{d}: “{e[:100]}”" for d, e in cur.fetchall()) or "(none)"
@@ -136,6 +141,17 @@ def run(limit: int = 200) -> dict:
             stats["reviewed"] += 1
             action = decide(verdict, gc)
             if action is None:
+                # adjudicate-once: flip to 'needs_human' so tomorrow's run doesn't pay
+                # to re-judge the same item; the review_queue view still shows it.
+                cur.execute("update incident set verification_status='needs_human', "
+                            "updated_at=now() where id=%s", (iid,))
+                cur.execute("""insert into review_action (entity_type, entity_id, reviewer,
+                               action, after_json, note) values ('incident',%s,
+                               'pipeline:auto_review','edit',%s::jsonb,%s)""",
+                            (iid, _json.dumps(verdict),
+                             f"auto-review -> needs_human (conf {verdict.get('confidence')}): "
+                             f"{verdict.get('reason','')[:150]}"))
+                conn.commit()
                 stats["left_for_human"] += 1
                 continue
             cur.execute("update incident set verification_status=%s, updated_at=now() "
@@ -162,6 +178,8 @@ def adjudicate(article_text: str, extraction_summary: str) -> dict:
         model=model, max_tokens=400, system=SYSTEM,
         tools=[TOOL], tool_choice={"type": "tool", "name": "record_review"},
         messages=[{"role": "user", "content": content}])
+    from pipeline import llmcost
+    llmcost.add(model, msg.usage)
     for block in msg.content:
         if block.type == "tool_use":
             return dict(block.input)

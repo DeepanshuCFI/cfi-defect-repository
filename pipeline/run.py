@@ -131,10 +131,22 @@ def cmd_process(args) -> None:
     store = get_store(force_jsonl=args.jsonl)
     try:
         arts = store.articles_by_status("fetched", limit=args.limit)
+        # budget goes to the mission-critical class first: defect-vocabulary stories are
+        # processed before behaviour-only crash reports, so a budget stop cuts the
+        # lowest-value tail (owner: ok to miss a few entries to stay under $2/day).
+        defect_terms = [t for lang in configload.keywords().values()
+                        for t in lang.get("infra_defect", [])]
+        arts.sort(key=lambda a: 0 if any(
+            t in (a.get("clean_text") or "") for t in defect_terms) else 1)
         print(f"processing {len(arts)} fetched article(s)…")
         stats = {"prefiltered": 0, "irrelevant": 0, "extracted": 0, "extracted_light": 0,
                  "skipped_pure_crash": 0, "failed": 0, "snippets_dropped": 0}
-        for a in arts:
+        from pipeline import llmcost
+        for n_done, a in enumerate(arts):
+            if llmcost.over():
+                print(f"  BUDGET STOP: ${llmcost.spent():.2f} >= ${llmcost.budget():.2f}"
+                      f" — {len(arts) - n_done} article(s) stay queued for tomorrow")
+                break
             text = a.get("clean_text") or ""
             if not text.strip():
                 store.set_article_status(a["id"], "failed")
@@ -194,7 +206,8 @@ def cmd_process(args) -> None:
                   f"F{inc['fatalities']}/I{inc['injuries']} conf={inc['extraction_confidence']:.2f} "
                   f"infra={inc['infra_implicated']} defects={dstr}")
             print(f"      loc: {inc.get('location_text_best','')[:90]}")
-        print(f"\nDONE {stats}")
+        print(f"\nDONE {stats} · llm spend so far ${llmcost.spent():.2f}"
+              f" (budget ${llmcost.budget():.2f})")
     finally:
         store.close()
 
@@ -287,28 +300,38 @@ def cmd_daily(args) -> None:
         run_id = cur.fetchone()[0]
         conn.commit()
     stats, ok = {}, True
-    try:
+
+    # Each stage is independently guarded: a failure is recorded but never blocks the
+    # later stages — in particular export ALWAYS runs, so the site deploys whatever is
+    # committed instead of going stale (run #9 postmortem, 2026-07-10).
+    def stage(name, fn):
+        nonlocal ok
+        try:
+            stats[name] = fn() or "done"
+        except Exception:
+            ok = False
+            stats[name] = "FAILED"
+            err = f"{name}: " + traceback.format_exc()[-800:]
+            stats.setdefault("errors", []).append(err)
+            print(f"STAGE FAILED ({err})")
+
+    def _collect():
         for st in states:
-            a = argparse.Namespace(district=None, state=st, gdelt=None, timespan="1d",
-                                   days=args.days, max_per_query=15, lang_terms=3,
-                                   delay=2.0, no_fetch=False, jsonl=False)
-            cmd_collect(a)
-        stats["collect"] = "done"
-        cmd_process(argparse.Namespace(limit=1000, jsonl=False))
-        stats["process"] = "done"
-        cmd_geocode(argparse.Namespace(limit=1000, jsonl=False))
-        stats["geocode"] = "done"
-        from pipeline.processing import auto_review as ar
-        stats["auto_review"] = ar.run()
-        cmd_recompute(argparse.Namespace())
-        stats["recompute"] = "done"
-        from scripts.export_public import main as export_main
-        export_main()
-        stats["export"] = "done"
-    except Exception:
-        ok = False
-        stats["error"] = traceback.format_exc()[-1500:]
-        print(stats["error"])
+            cmd_collect(argparse.Namespace(
+                district=None, state=st, gdelt=None, timespan="1d",
+                days=args.days, max_per_query=15, lang_terms=3,
+                delay=2.0, no_fetch=False, jsonl=False))
+
+    from pipeline import llmcost
+    from pipeline.processing import auto_review as ar
+    from scripts.export_public import main as export_main
+    stage("collect", _collect)
+    stage("process", lambda: cmd_process(argparse.Namespace(limit=1000, jsonl=False)))
+    stage("geocode", lambda: cmd_geocode(argparse.Namespace(limit=1000, jsonl=False)))
+    stage("auto_review", ar.run)
+    stage("recompute", lambda: cmd_recompute(argparse.Namespace()))
+    stage("export", export_main)
+    stats["llm_spend_usd"] = round(llmcost.spent(), 2)
     with connect() as conn, conn.cursor() as cur:
         cur.execute("""update pipeline_run set finished_at=now(), ok=%s,
                        stage_stats=%s::jsonb where id=%s""",

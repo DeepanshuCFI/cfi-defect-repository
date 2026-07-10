@@ -152,6 +152,8 @@ def extract(title: str | None, text: str,
         model=model, max_tokens=2000, system=SYSTEM,
         tools=[build_tool()], tool_choice={"type": "tool", "name": "record_incident"},
         messages=[{"role": "user", "content": content}])
+    from pipeline import llmcost
+    llmcost.add(model, msg.usage)
     for block in msg.content:
         if block.type == "tool_use":
             return validate_snippets(dict(block.input), text)

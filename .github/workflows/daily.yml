@@ -2,7 +2,8 @@ name: daily-pipeline
 
 on:
   schedule:
-    - cron: "30 1 * * *"        # 01:30 UTC = 07:00 IST
+    - cron: "30 1 * * *"        # 01:30 UTC = 07:00 IST target (usually lands 10-11 IST)
+    - cron: "30 9 * * *"        # 15:00 IST self-healing retry — skips if today succeeded
   workflow_dispatch: {}          # manual runs from the Actions tab
 
 concurrency:
@@ -14,22 +15,48 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 330    # 3 states (BR+UP+RJ, 146 districts) — collect alone can take ~2h
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - name: Skip retry if today already succeeded (self-healing guard)
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TODAY_IST=$(TZ=Asia/Kolkata date +%F)
+          OK=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/daily.yml/runs?status=success&per_page=10" \
+            | python3 -c "
+          import json, sys
+          from datetime import datetime, timezone, timedelta
+          ist = timezone(timedelta(hours=5, minutes=30))
+          runs = json.load(sys.stdin).get('workflow_runs', [])
+          print(any(datetime.fromisoformat(r['run_started_at'].replace('Z','+00:00'))
+                    .astimezone(ist).strftime('%Y-%m-%d') == '$TODAY_IST' for r in runs))")
+          if [ "$OK" = "True" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "go=no" >> "$GITHUB_OUTPUT"
+            echo "A successful run already happened today (IST) — skipping."
+          else
+            echo "go=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v6
+        if: steps.guard.outputs.go == 'yes'
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install dependencies
+        if: steps.guard.outputs.go == 'yes'
         run: pip install -r requirements.txt
 
       - name: Sync configs to DB (git config/ is the source of truth)
+        if: steps.guard.outputs.go == 'yes'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python scripts/load_configs.py
 
       - name: Run daily pipeline (collect -> process -> geocode -> recompute -> export)
+        if: steps.guard.outputs.go == 'yes'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}       # session-pooler URL (runners are IPv4-only)
@@ -39,7 +66,10 @@ jobs:
         run: python -m pipeline.run daily --days 2
 
       - name: Deploy dashboard to Vercel
-        if: success()
+        # deploys even when a pipeline stage failed: export always runs (run.py stage
+        # guards), and gate-passed data is always safe to publish. Stale site was the
+        # real failure mode (run #9).
+        if: ${{ steps.guard.outputs.go == 'yes' && !cancelled() }}
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
