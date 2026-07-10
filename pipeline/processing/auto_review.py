@@ -75,7 +75,10 @@ SYSTEM = (
     "infra_mentioned or infra_causal true WITH clear textual support, and the first "
     "extraction faithful.\n"
     "4. confirm_reject: not India, not road-traffic, pure crime/suicide/weather, or "
-    "extraction contradicts the article.\n"
+    "extraction contradicts the article. CRITICAL: this registry is about ROADS ONLY — "
+    "building/roof/ceiling/wall collapses, hospital/school/office premises, elevators, "
+    "wells, and electrocutions are confirm_reject UNLESS the road itself is the hazard "
+    "(e.g. a road cave-in, an open drain ON a road, waterlogged carriageway).\n"
     "5. crash_only_ok: genuine road crash, but cause is purely driver/vehicle "
     "behaviour and no infra deficiency is reported. This is a VALID record for "
     "crash-frequency statistics — not an error — just not publishable as a defect.\n"
@@ -115,7 +118,7 @@ def run(limit: int = 200) -> dict:
           select r.id, r.location_text_best, r.fatalities, r.injuries, r.infra_implicated,
                  r.extraction_confidence, r.geocode_confidence, r.narrative_summary,
                  a.clean_text
-          from review_queue r
+          from incident r
           join source_article a on a.id = r.primary_source_id
           where a.clean_text is not null and r.verification_status = 'auto'
           order by r.id limit %s""", (limit,))

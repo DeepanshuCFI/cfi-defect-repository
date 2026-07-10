@@ -40,7 +40,11 @@ SYSTEM = (
     "defect/hazard in India. Out of scope: crashes outside India, crime/violence, "
     "suicides, rail/air/boat accidents (unless at a road level crossing), pure "
     "statistics/policy pieces with no specific location, weather stories without "
-    "road damage. Judge only from the text given."
+    "road damage. Also OUT of scope even though they involve infrastructure: "
+    "building/roof/ceiling/wall collapses, hospital/school/office premises hazards, "
+    "elevators, wells, electrocutions — UNLESS the road itself is the hazard "
+    "(road cave-in, open drain on a road, waterlogged carriageway). "
+    "Judge only from the text given."
 )
 
 
