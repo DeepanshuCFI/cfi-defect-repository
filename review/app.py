@@ -163,27 +163,38 @@ def resolve_correction(cid: int, who: str = Depends(reviewer)):
 
 
 @app.get("/", response_class=HTMLResponse)
-def queue(who: str = Depends(reviewer)):
+def queue(who: str = Depends(reviewer), all: int = 0):
     rows = q("""
       select r.id, r.queue_reason, r.crash_date, r.location_text_best, r.road_name,
              r.road_type, r.admin_district, r.admin_state, r.fatalities, r.injuries,
              r.narrative_summary, r.extraction_confidence, r.geocode_confidence,
-             r.infra_implicated, a.url, a.outlet_name
+             r.infra_implicated, a.url, a.outlet_name,
+             (select count(*) from incident_source s where s.incident_id = r.id) n_sources
       from review_queue r
       left join source_article a on a.id = r.primary_source_id
-      order by r.fatalities desc, r.id""")
+      order by (r.fatalities > 0) desc,
+               (select count(*) from incident_source s2 where s2.incident_id = r.id) desc,
+               r.geocode_confidence desc nulls last, r.id desc""")
     n_pub = q("select count(*) c from public_incident")[0]["c"]
+    # priority inbox: humans should only need to look at fatal or multi-source items;
+    # the long geocode-blocked tail stays a click away, not in their face.
+    hot = [r for r in rows if r["fatalities"] > 0 or r["n_sources"] > 1]
+    shown = rows if all else (hot or rows[:10])
+    toggle = (f'<a href="/?all=1" style="color:#C8C0FF">show all {len(rows)}</a>' if not all
+              else '<a href="/" style="color:#C8C0FF">show priority only</a>')
     cards = []
-    for r in rows:
+    for r in shown:
         defects = q("""select defect_type, defect_confidence, evidence_snippet
                        from incident_defect where incident_id=%s""", (r["id"],))
         dhtml = "".join(
             f"<div class='snippet'><b>{html.escape(d['defect_type'])}</b> "
             f"(conf {d['defect_confidence']})<br>“{html.escape(d['evidence_snippet'][:220])}”</div>"
             for d in defects) or "<div class='meta'>no defects tagged</div>"
+        multi = (f" <span class='reason' style='background:#F10015;color:#fff'>"
+                 f"{r['n_sources']} sources</span>" if r["n_sources"] > 1 else "")
         cards.append(f"""
 <div class="card">
-  <span class="reason">{r['queue_reason']}</span>
+  <span class="reason">{r['queue_reason']}</span>{multi}
   <h3 style="margin:8px 0 0">#{r['id']} · {html.escape(r['location_text_best'] or '?')}</h3>
   <div class="meta">{r['crash_date'] or 'undated'} · {html.escape(r['road_name'] or '?')}
     [{r['road_type']}] · {html.escape(r['admin_district'] or '?')}, {html.escape(r['admin_state'] or '?')}
@@ -202,9 +213,9 @@ def queue(who: str = Depends(reviewer)):
   </div>
 </div>""")
     return f"""<style>{CSS}</style>
-<div class="top">Crashfree India · Review Queue<small>{len(rows)} awaiting review · {n_pub} public · signed in: {who.removeprefix("reviewer:")} · <a href="/qa" style="color:#C8C0FF">QA</a></small></div>
-<div class="wrap"><div class="count">Approve overrides the confidence gate. Every action is audit-logged.</div>
-{''.join(cards) or '<div class="card">Queue is empty 🎉</div>'}</div>"""
+<div class="top">Crashfree India · Review Queue<small>{len(hot)} need attention · {len(rows)} total · {n_pub} public · signed in: {who.removeprefix("reviewer:")} · {toggle} · <a href="/qa" style="color:#C8C0FF">QA</a></small></div>
+<div class="wrap"><div class="count">Showing {"all items" if all else "priority items (fatal or multi-source)"} — the rest wait harmlessly, unpublished. Approve overrides the confidence gate. Every action is audit-logged.</div>
+{''.join(cards) or '<div class="card">Nothing needs attention 🎉</div>'}</div>"""
 
 
 @app.post("/incident/{iid}/approve")
