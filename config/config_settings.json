@@ -70,7 +70,7 @@
       "body_prefilter": true,
       "tiered_extraction": true,
       "skip_pure_crashes": false,
-      "llm_budget_usd_per_run": 2.0
+      "llm_budget_usd_per_day": 1.95
     },
     "models_pricing": {
       "_comment": "USD per million tokens; keep in sync with anthropic.com/pricing",

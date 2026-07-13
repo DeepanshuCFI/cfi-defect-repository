@@ -121,6 +121,12 @@ def cmd_collect(args) -> None:
         store.close()
 
 
+def _api_limit_hit(e: Exception) -> bool:
+    """The Anthropic monthly spend-limit refusal — treat as 'stop for today', never as
+    per-article failure (2026-07-13: 424 good articles were WARN'd through it)."""
+    return "reached your specified api usage limits" in str(e).lower()
+
+
 def cmd_process(args) -> None:
     """Phase 3: fetched -> relevance -> extraction -> incident."""
     from pipeline import configload
@@ -160,6 +166,9 @@ def cmd_process(args) -> None:
             try:
                 cls = rel.classify(title, text)
             except Exception as e:
+                if _api_limit_hit(e):
+                    print("  API MONTHLY LIMIT hit — stopping; queue waits for tomorrow")
+                    break
                 print(f"  WARN relevance failed #{a['id']}: {e}")
                 stats["failed"] += 1
                 continue
@@ -181,6 +190,9 @@ def cmd_process(args) -> None:
                                           published_at=str(a.get("published_at") or "") or None,
                                           light=light)
             except Exception as e:
+                if _api_limit_hit(e):
+                    print("  API MONTHLY LIMIT hit — stopping; queue waits for tomorrow")
+                    break
                 print(f"  WARN extraction failed #{a['id']}: {e}")
                 store.set_article_status(a["id"], "failed")
                 stats["failed"] += 1
@@ -372,6 +384,19 @@ def cmd_daily(args) -> None:
     from pipeline import llmcost
     from pipeline.processing import auto_review as ar
     from scripts.export_public import main as export_main
+
+    # per-DAY budget: seed the meter with what earlier runs already spent today,
+    # so a retry run can never double the daily cap.
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("""select coalesce(sum((stage_stats->>'llm_spend_usd')::numeric), 0)
+                       from pipeline_run
+                       where started_at::date = current_date and id <> %s""", (run_id,))
+        prior = float(cur.fetchone()[0])
+    if prior:
+        llmcost.set_baseline(prior)
+        print(f"budget: ${prior:.2f} already spent today by earlier runs "
+              f"(daily cap ${llmcost.budget():.2f})")
+
     stage("collect", _collect)
     stage("process", lambda: cmd_process(argparse.Namespace(limit=1000, jsonl=False)))
     stage("geocode", lambda: cmd_geocode(argparse.Namespace(limit=1000, jsonl=False)))

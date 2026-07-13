@@ -138,6 +138,9 @@ def run(limit: int = 200) -> dict:
             try:
                 verdict = adjudicate(text, ext)
             except Exception as e:
+                if "reached your specified api usage limits" in str(e).lower():
+                    print("  API MONTHLY LIMIT hit — stopping; queue waits for tomorrow")
+                    break
                 print(f"  WARN auto-review failed #{iid}: {e}")
                 stats["errors"] += 1
                 continue
