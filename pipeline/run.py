@@ -148,10 +148,15 @@ def cmd_process(args) -> None:
         stats = {"prefiltered": 0, "irrelevant": 0, "extracted": 0, "extracted_light": 0,
                  "skipped_pure_crash": 0, "failed": 0, "snippets_dropped": 0}
         from pipeline import llmcost
+        # extraction may spend only its SHARE of the daily budget; the rest is reserved
+        # for adjudication (which gates publication). Without this, extraction ate 100%
+        # and nothing new ever published (11-14 Jul map freeze).
+        ext_share = float(proc_cfg.get("extraction_budget_share", 0.5))
         for n_done, a in enumerate(arts):
-            if llmcost.over():
-                print(f"  BUDGET STOP: ${llmcost.spent():.2f} >= ${llmcost.budget():.2f}"
-                      f" — {len(arts) - n_done} article(s) stay queued for tomorrow")
+            if llmcost.over(ext_share):
+                print(f"  EXTRACTION BUDGET STOP: ${llmcost.spent():.2f} >= "
+                      f"${llmcost.budget() * ext_share:.2f} (adjudication reserve kept) — "
+                      f"{len(arts) - n_done} article(s) stay queued for tomorrow")
                 break
             text = a.get("clean_text") or ""
             if not text.strip():

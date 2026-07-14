@@ -47,5 +47,8 @@ def budget() -> float:
     return float(p.get("llm_budget_usd_per_day", p.get("llm_budget_usd_per_run", 2.0)))
 
 
-def over() -> bool:
-    return _spent_usd >= budget()
+def over(share: float = 1.0) -> bool:
+    """True once spend reaches `share` of the daily budget. Extraction passes a share
+    < 1 so it can never consume the whole budget and starve adjudication (which gates
+    publication) — the 11-14 Jul map freeze: extraction ate 100%, 0 got published."""
+    return _spent_usd >= budget() * share
