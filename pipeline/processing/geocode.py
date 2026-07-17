@@ -25,6 +25,13 @@ from pipeline.settings import MAPBOX_TOKEN, ROOT
 
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 MAPBOX = "https://api.mapbox.com/search/geocode/v6/forward"
+
+# Fail-closed cap for an UNANCHORED geocode (no state AND no district known). The
+# state sanity check can't run without an expected state, so a bare village name is
+# free to match a homonym anywhere in India — that put a Hathras (UP) crash in Odisha
+# at 0.80 conf, published (#276/hotspot 337, 2026-07-18). Below the 0.6 publish bar =>
+# routes to review instead of the public map.
+UNANCHORED_MAX_CONF = 0.5
 UA = "CrashfreeIndia-DefectRepo/0.1 (road-safety research; contact: deepanshu@crashfreeindia.org)"
 CACHE_PATH = ROOT / "data" / "geocode_cache.json"
 INDIA_BBOX = (6.0, 68.0, 37.6, 97.5)   # lat_min, lon_min, lat_max, lon_max
@@ -192,6 +199,9 @@ def geocode(location_text: str, road_name: str | None = None,
         if _in_india(lat, lon):
             return {"lat": lat, "lon": lon, "geocode_confidence": 0.95,
                     "geocode_method": "coords_in_text", "display_name": "coords in text"}
+    # Anchored = we know a state or district, so _state_ok() can actually validate the
+    # hit. Unanchored results are capped below the publish bar (fail closed).
+    anchored = bool((admin_state or "").strip() or (admin_district or "").strip())
     for query, method, conf in _variants(location_text, road_name, admin_city,
                                          admin_district, admin_state):
         hit = _resolve(query)
@@ -202,8 +212,10 @@ def geocode(location_text: str, road_name: str | None = None,
             continue
         if not _state_ok(hit["state"], admin_state):
             continue           # homonym in another state — keep descending the ladder
+        if not anchored:
+            conf = min(conf, UNANCHORED_MAX_CONF)
         return {"lat": lat, "lon": lon, "geocode_confidence": conf,
-                "geocode_method": method,
+                "geocode_method": method + ("" if anchored else "_unanchored"),
                 "display_name": hit["display"]}
     return {"lat": None, "lon": None, "geocode_confidence": None,
             "geocode_method": None, "display_name": None}

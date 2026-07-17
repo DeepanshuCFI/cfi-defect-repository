@@ -22,6 +22,38 @@ WEIGHTS = {"w1_fatalities_weighted": 0.30, "w2_crash_frequency": 0.25, "w3_recen
 TIERS = {"critical": 75, "high": 50, "medium": 25, "watch": 0}
 
 
+# ---------------------------------------------------------------- geocode anchoring
+def test_unanchored_geocode_capped_below_publish_bar(monkeypatch):
+    """#276 (2026-07-18): 'near Bisawar village, Vidhipur road,' with NO state geocoded
+    to Odisha at 0.80 and published — a Hathras (UP) crash. With no state/district the
+    state guard cannot run, so confidence must be capped below the 0.6 gate."""
+    from pipeline.processing import geocode as gc
+    monkeypatch.setattr(gc, "_resolve", lambda q: {
+        "lat": 20.69553, "lon": 86.162129, "state": "Odisha", "display": "Bisawar, Odisha"})
+    g = gc.geocode("near Bisawar village, Vidhipur road, ")
+    assert g["lat"] is not None
+    assert g["geocode_confidence"] <= gc.UNANCHORED_MAX_CONF < 0.6   # -> review, not public
+    assert g["geocode_method"].endswith("_unanchored")
+
+
+def test_anchored_geocode_keeps_full_confidence(monkeypatch):
+    from pipeline.processing import geocode as gc
+    monkeypatch.setattr(gc, "_resolve", lambda q: {
+        "lat": 27.5, "lon": 78.05, "state": "Uttar Pradesh", "display": "Bisawar, Hathras, UP"})
+    g = gc.geocode("near Bisawar village, Vidhipur road", admin_district="Hathras",
+                   admin_state="Uttar Pradesh")
+    assert g["geocode_confidence"] >= 0.6
+    assert not g["geocode_method"].endswith("_unanchored")
+
+
+def test_state_guard_still_rejects_wrong_state_when_anchored(monkeypatch):
+    from pipeline.processing import geocode as gc
+    monkeypatch.setattr(gc, "_resolve", lambda q: {
+        "lat": 20.69553, "lon": 86.162129, "state": "Odisha", "display": "Bisawar, Odisha"})
+    g = gc.geocode("near Bisawar village", admin_state="Uttar Pradesh")
+    assert g["lat"] is None      # every ladder rung rejected — no wrong-state pin
+
+
 # ---------------------------------------------------------------- incident coercion
 def test_coerce_stringly_null_casualties():
     # daily run #9 (2026-07-10) died on injuries="null" (string) hitting an int column

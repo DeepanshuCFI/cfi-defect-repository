@@ -246,12 +246,20 @@ def cmd_geocode(args) -> None:
     if use_db:
         from pipeline.db import connect
         with connect() as conn, conn.cursor() as cur:
-            cur.execute("""select id, location_text_best, road_name, admin_city,
-                                  admin_district, admin_state
-                           from incident where geom is null limit %s""", (args.limit,))
+            # Fall back to the SOURCE ARTICLE's state/district when extraction returned
+            # null: the collector always knows them (the district query that found the
+            # article). Without this the geocoder is unanchored and can match a village
+            # homonym in any state (#276: Hathras UP -> Odisha).
+            cur.execute("""select i.id, i.location_text_best, i.road_name, i.admin_city,
+                                  coalesce(i.admin_district, a.district),
+                                  coalesce(i.admin_state, a.state),
+                                  i.admin_state is null and a.state is not null
+                           from incident i
+                           left join source_article a on a.id = i.primary_source_id
+                           where i.geom is null limit %s""", (args.limit,))
             rows = cur.fetchall()
             print(f"geocoding {len(rows)} incident(s)…")
-            for iid, loc, road, city, distr, state in rows:
+            for iid, loc, road, city, distr, state, used_fallback in rows:
                 g = geo(loc or "", road, city, distr, state)
                 if g["lat"] is not None:
                     cur.execute(
@@ -259,6 +267,17 @@ def cmd_geocode(args) -> None:
                            geocode_confidence=%s, geocode_method=%s where id=%s""",
                         (f"POINT({g['lon']} {g['lat']})", g["geocode_confidence"],
                          g["geocode_method"], iid))
+                    if used_fallback:
+                        # the hit passed _state_ok against this state, so labelling the
+                        # record with it is consistent with where it was actually placed
+                        cur.execute("""update incident set admin_state=coalesce(admin_state,%s),
+                                       admin_district=coalesce(admin_district,%s) where id=%s""",
+                                    (state, distr, iid))
+                        cur.execute("""insert into review_action (entity_type, entity_id,
+                                       reviewer, action, note) values
+                                       ('incident',%s,'pipeline:rule','edit',%s)""",
+                                    (iid, f"admin_state/district backfilled from source "
+                                          f"article ({state}/{distr}) — extraction returned null"))
                 dist[g["geocode_method"] or "unresolved"] = dist.get(g["geocode_method"] or "unresolved", 0) + 1
                 print(f"  #{iid} {g['geocode_method'] or 'UNRESOLVED'} "
                       f"conf={g['geocode_confidence']} {(g['display_name'] or '')[:70]}")
@@ -271,12 +290,14 @@ def cmd_geocode(args) -> None:
             from pipeline.settings import MAPBOX_TOKEN
             if MAPBOX_TOKEN:
                 cur.execute("""
-                  select id, location_text_best, road_name, admin_city,
-                         admin_district, admin_state, geocode_confidence,
-                         verification_status
-                  from incident
-                  where verification_status in ('auto','needs_human')
-                    and (geocode_confidence is null or geocode_confidence < 0.6)
+                  select i.id, i.location_text_best, i.road_name, i.admin_city,
+                         coalesce(i.admin_district, a.district),
+                         coalesce(i.admin_state, a.state), i.geocode_confidence,
+                         i.verification_status
+                  from incident i
+                  left join source_article a on a.id = i.primary_source_id
+                  where i.verification_status in ('auto','needs_human')
+                    and (i.geocode_confidence is null or i.geocode_confidence < 0.6)
                   limit %s""", (args.limit,))
                 rescue = cur.fetchall()
                 print(f"\nrescue pass: re-geocoding {len(rescue)} low-confidence item(s)…")
