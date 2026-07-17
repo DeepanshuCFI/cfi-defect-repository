@@ -26,12 +26,12 @@ from pipeline.settings import MAPBOX_TOKEN, ROOT
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 MAPBOX = "https://api.mapbox.com/search/geocode/v6/forward"
 
-# Fail-closed cap for an UNANCHORED geocode (no state AND no district known). The
-# state sanity check can't run without an expected state, so a bare village name is
-# free to match a homonym anywhere in India — that put a Hathras (UP) crash in Odisha
-# at 0.80 conf, published (#276/hotspot 337, 2026-07-18). Below the 0.6 publish bar =>
-# routes to review instead of the public map.
-UNANCHORED_MAX_CONF = 0.5
+# Fail-closed caps: a validity check that can't run must LOWER confidence, never
+# silently pass (guard-audit 2026-07-18; the Hathras->Odisha lesson).
+UNANCHORED_MAX_CONF = 0.5     # no state AND no district known -> state guard can't run
+STATELESS_HIT_MAX_CONF = 0.55  # hit carries no state metadata -> guard ran on nothing
+WIDE_AREA_KM = 6.0             # hit spans a huge feature (long road / big polygon):
+WIDE_AREA_MAX_CONF = 0.55      # a pin somewhere on 47km of Outer Ring Road is not 0.7
 UA = "CrashfreeIndia-DefectRepo/0.1 (road-safety research; contact: deepanshu@crashfreeindia.org)"
 CACHE_PATH = ROOT / "data" / "geocode_cache.json"
 INDIA_BBOX = (6.0, 68.0, 37.6, 97.5)   # lat_min, lon_min, lat_max, lon_max
@@ -106,15 +106,23 @@ def _mapbox(query: str) -> dict | None:
             f = feats[0]
             lon, lat = f["geometry"]["coordinates"]
             props = f.get("properties", {})
+            bbox = props.get("bbox") or f.get("bbox")
             result = {"lat": float(lat), "lon": float(lon),
                       "state": ((props.get("context", {}).get("region") or {})
                                 .get("name") or ""),
-                      "display": (props.get("full_address") or "")[:160]}
+                      "display": (props.get("full_address") or "")[:160],
+                      "span_km": _bbox_span_km(bbox[1], bbox[0], bbox[3], bbox[2])
+                                 if bbox else 0.0}
     except Exception:
         result = None
     cache[key] = result
     _save_cache()
     return result
+
+
+def _bbox_span_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Rough diagonal of a bounding box in km (1 deg ~ 111 km; fine for a threshold)."""
+    return ((lat2 - lat1) ** 2 + (lon2 - lon1) ** 2) ** 0.5 * 111.0
 
 
 def _resolve(query: str) -> dict | None:
@@ -125,9 +133,12 @@ def _resolve(query: str) -> dict | None:
             return hit
     hit = _nominatim(query)
     if hit:
+        bb = hit.get("boundingbox")
         return {"lat": float(hit["lat"]), "lon": float(hit["lon"]),
                 "state": (hit.get("address", {}).get("state") or ""),
-                "display": (hit.get("display_name") or "")[:160]}
+                "display": (hit.get("display_name") or "")[:160],
+                "span_km": _bbox_span_km(float(bb[0]), float(bb[2]),
+                                         float(bb[1]), float(bb[3])) if bb else 0.0}
     return None
 
 
@@ -212,10 +223,18 @@ def geocode(location_text: str, road_name: str | None = None,
             continue
         if not _state_ok(hit["state"], admin_state):
             continue           # homonym in another state — keep descending the ladder
+        suffix = ""
         if not anchored:
-            conf = min(conf, UNANCHORED_MAX_CONF)
+            conf, suffix = min(conf, UNANCHORED_MAX_CONF), "_unanchored"
+        elif not (hit["state"] or "").strip():
+            # the state guard "passed" only because the hit carried no state metadata —
+            # unverified is not verified; cap below the publish bar
+            conf, suffix = min(conf, STATELESS_HIT_MAX_CONF), "_stateless_hit"
+        if hit.get("span_km", 0.0) > WIDE_AREA_KM:
+            # pin is an arbitrary point on a huge feature (e.g. a 47km ring road)
+            conf, suffix = min(conf, WIDE_AREA_MAX_CONF), suffix or "_wide_area"
         return {"lat": lat, "lon": lon, "geocode_confidence": conf,
-                "geocode_method": method + ("" if anchored else "_unanchored"),
+                "geocode_method": method + suffix,
                 "display_name": hit["display"]}
     return {"lat": None, "lon": None, "geocode_confidence": None,
             "geocode_method": None, "display_name": None}

@@ -169,6 +169,7 @@ def queue(who: str = Depends(reviewer), all: int = 0):
              r.road_type, r.admin_district, r.admin_state, r.fatalities, r.injuries,
              r.narrative_summary, r.extraction_confidence, r.geocode_confidence,
              r.infra_implicated, a.url, a.outlet_name,
+             ST_Y(r.geom::geometry) pin_lat, ST_X(r.geom::geometry) pin_lon,
              (select count(*) from incident_source s where s.incident_id = r.id) n_sources
       from review_queue r
       left join source_article a on a.id = r.primary_source_id
@@ -202,7 +203,8 @@ def queue(who: str = Depends(reviewer), all: int = 0):
     · infra {r['infra_implicated']}</div>
   <p style="font-size:14px">{html.escape(r['narrative_summary'] or '')}</p>
   {dhtml}
-  <div class="meta"><a href="{html.escape(r['url'] or '#')}" target="_blank">source: {html.escape(r['outlet_name'] or r['url'] or '?')}</a></div>
+  <div class="meta"><a href="{html.escape(r['url'] or '#')}" target="_blank">source: {html.escape(r['outlet_name'] or r['url'] or '?')}</a>
+    {f''' · <a href="https://www.openstreetmap.org/?mlat={r['pin_lat']:.5f}&mlon={r['pin_lon']:.5f}#map=9/{r['pin_lat']:.5f}/{r['pin_lon']:.5f}" target="_blank"><b>📍 verify pin on map</b></a> — a pin in the wrong state/district is grounds to Edit or Reject''' if r['pin_lat'] is not None else ' · <b>no pin</b> (ungeocoded)'}</div>
   <div class="row">
     <form method="post" action="/incident/{r['id']}/approve"><button class="ok">Approve → publish</button></form>
     <form method="post" action="/incident/{r['id']}/reject"><button class="no">Reject</button></form>

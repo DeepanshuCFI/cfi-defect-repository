@@ -136,6 +136,10 @@ class DBStore:
                        hamming_max: int = 3, window_days: int = 7) -> bool:
         if not dedup_hash:
             return False
+        if not district and not state:
+            # guard-audit 2026-07-18: with no locality the compare would silently go
+            # GLOBAL (the original dedup bug). Fail toward keeping the article.
+            return False
         from pipeline.fetch import is_content_duplicate
         # Scope candidates to the SAME district (fallback: same state). Without this,
         # short vernacular defect stories collapse across unrelated districts/states.
@@ -229,6 +233,8 @@ class JsonlStore:
                        hamming_max: int = 3, window_days: int = 7) -> bool:
         if not dedup_hash:
             return False
+        if not district and not state:
+            return False       # no locality -> never compare globally (see DBStore)
         from pipeline.fetch import is_content_duplicate
         scoped = self._rows
         if district:

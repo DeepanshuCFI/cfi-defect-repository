@@ -146,6 +146,15 @@ def run(limit: int = 200) -> dict:
                 continue
             stats["reviewed"] += 1
             action = decide(verdict, gc)
+            if action == "auto_published":
+                # taxonomy-locked principle: no real defect tag => not publishable as a
+                # defect dossier, however good the verdict (guard restored after
+                # migration 009 dropped the old view's defect-existence check)
+                cur.execute("""select 1 from incident_defect where incident_id=%s
+                               and defect_type not in ('other_infrastructure',
+                                   'no_infrastructure_defect_identified') limit 1""", (iid,))
+                if cur.fetchone() is None:
+                    action = None
             if action is None:
                 # adjudicate-once: flip to 'needs_human' so tomorrow's run doesn't pay
                 # to re-judge the same item; the review_queue view still shows it.

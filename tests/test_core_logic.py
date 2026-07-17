@@ -54,6 +54,36 @@ def test_state_guard_still_rejects_wrong_state_when_anchored(monkeypatch):
     assert g["lat"] is None      # every ladder rung rejected — no wrong-state pin
 
 
+def test_stateless_hit_capped(monkeypatch):
+    # anchored query, but the HIT carries no state metadata: guard ran on nothing
+    from pipeline.processing import geocode as gc
+    monkeypatch.setattr(gc, "_resolve", lambda q: {
+        "lat": 27.5, "lon": 78.05, "state": "", "display": "somewhere", "span_km": 0.5})
+    g = gc.geocode("near Bisawar village", admin_state="Uttar Pradesh")
+    assert g["geocode_confidence"] <= gc.STATELESS_HIT_MAX_CONF < 0.6
+    assert g["geocode_method"].endswith("_stateless_hit")
+
+
+def test_wide_area_hit_capped(monkeypatch):
+    # 'Outer Ring Road, Delhi' family: a 47km way must not pin at 0.7
+    from pipeline.processing import geocode as gc
+    monkeypatch.setattr(gc, "_resolve", lambda q: {
+        "lat": 28.55, "lon": 77.19, "state": "Delhi", "display": "Outer Ring Road",
+        "span_km": 47.0})
+    g = gc.geocode("Outer Ring Road", admin_state="Delhi", admin_district="South Delhi")
+    assert g["geocode_confidence"] <= gc.WIDE_AREA_MAX_CONF < 0.6
+    assert g["geocode_method"].endswith("_wide_area")
+
+
+def test_dedup_without_locality_never_matches():
+    # near_duplicate must fail toward KEEPING the article when unscoped (JsonlStore
+    # mirrors the DBStore guard: no district & no state -> global compare forbidden)
+    from pipeline.store import JsonlStore
+    s = JsonlStore.__new__(JsonlStore)
+    s._rows = [{"dedup_hash": "6d20e41c77ea5e12", "district": "Pilibhit", "state": "UP"}]
+    assert not s.near_duplicate("6d20e41c77ea5e12", district=None, state=None)
+
+
 # ---------------------------------------------------------------- incident coercion
 def test_coerce_stringly_null_casualties():
     # daily run #9 (2026-07-10) died on injuries="null" (string) hitting an int column
