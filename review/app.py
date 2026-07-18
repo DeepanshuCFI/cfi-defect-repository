@@ -79,16 +79,43 @@ def get_conn():
     return _conn
 
 
+def _reset_conn():
+    global _conn
+    try:
+        if _conn is not None:
+            _conn.close()
+    except Exception:
+        pass
+    _conn = None
+
+
+def _with_retry(fn):
+    """The Supabase pooler kills idle connections and psycopg's .closed stays False
+    until an operation fails — so after Render's free-tier sleep, the first query on
+    the stale socket raised and the UI 500'd (reject #1102, 2026-07-20). One retry on
+    a fresh connection; every action here is an idempotent single statement."""
+    import psycopg
+    try:
+        return fn()
+    except (psycopg.OperationalError, psycopg.InterfaceError):
+        _reset_conn()
+        return fn()
+
+
 def q(sql: str, params=()) -> list[dict]:
-    with get_conn().cursor() as cur:
-        cur.execute(sql, params)
-        cols = [d.name for d in cur.description]
-        return [dict(zip(cols, r)) for r in cur.fetchall()]
+    def run():
+        with get_conn().cursor() as cur:
+            cur.execute(sql, params)
+            cols = [d.name for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+    return _with_retry(run)
 
 
 def x(sql: str, params=()) -> None:
-    with get_conn().cursor() as cur:
-        cur.execute(sql, params)
+    def run():
+        with get_conn().cursor() as cur:
+            cur.execute(sql, params)
+    _with_retry(run)
 
 
 def log_action(entity_id: int, action: str, before=None, after=None, note: str = "",
