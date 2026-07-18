@@ -63,6 +63,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}   # geocoding primary; empty = Nominatim only
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # site-watch pings; empty = console only
           PYTHONUNBUFFERED: "1"
         run: python -m pipeline.run daily --days 2
 

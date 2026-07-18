@@ -423,9 +423,19 @@ def cmd_daily(args) -> None:
         print(f"budget: ${prior:.2f} already spent today by earlier runs "
               f"(daily cap ${llmcost.budget():.2f})")
 
+    from pipeline.processing import watch
+
+    def _watch():
+        store = get_store()
+        try:
+            return watch.run(store)
+        finally:
+            store.close()
+
     stage("collect", _collect)
     stage("process", lambda: cmd_process(argparse.Namespace(limit=1000, jsonl=False)))
     stage("geocode", lambda: cmd_geocode(argparse.Namespace(limit=1000, jsonl=False)))
+    stage("watch", _watch)
     stage("auto_review", ar.run)
     stage("recompute", lambda: cmd_recompute(argparse.Namespace()))
     stage("export", export_main)

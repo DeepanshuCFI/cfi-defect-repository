@@ -84,6 +84,28 @@ def test_dedup_without_locality_never_matches():
     assert not s.near_duplicate("6d20e41c77ea5e12", district=None, state=None)
 
 
+# ---------------------------------------------------------------- site watch
+from pipeline.processing.watch import name_matches  # noqa: E402
+
+
+def test_watch_variant_plus_locality_matches():
+    t = "तेजाजी नगर चौराहे पर तेज रफ्तार ट्रक ने बाइक सवार को टक्कर मारी, Indore में हादसा"
+    assert name_matches(t, None, ["तेजाजी नगर", "Tejaji Nagar"], "Indore", "Indore")
+
+
+def test_watch_generic_name_needs_locality():
+    # 'Medical College Junction' exists in every city — must NOT match without
+    # city/district corroboration
+    t = "accident at medical college junction leaves two injured"
+    assert not name_matches(t, None, ["Medical College Junction"], "Kozhikode", "Kozhikode")
+    assert name_matches(t, "Kozhikode", ["Medical College Junction"], "Kozhikode", "Kozhikode")
+
+
+def test_watch_no_variant_no_match():
+    assert not name_matches("a crash on some road in Indore", None,
+                            ["Tejaji Nagar"], "Indore", "Indore")
+
+
 # ---------------------------------------------------------------- incident coercion
 def test_coerce_stringly_null_casualties():
     # daily run #9 (2026-07-10) died on injuries="null" (string) hitting an int column
