@@ -73,7 +73,8 @@ def collect_sites(store, days: int = 3, max_per_query: int = 10) -> dict:
                         "outlet_tier": tier_for(it.source_domain),
                         "language": it.language, "state": state, "district": district,
                         "published_at": f.published_at or it.published_at,
-                        "raw_html": f.raw_html, "clean_text": f.clean_text,
+                        "raw_html": None if dup else f.raw_html,
+                        "clean_text": f.clean_text,
                         "dedup_hash": f.dedup_hash,
                         "processing_status": "near_duplicate" if dup else "fetched",
                         }) is not None:

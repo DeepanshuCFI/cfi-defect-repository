@@ -68,7 +68,11 @@ def collect_district(d: dict, store, args) -> dict:
                         stats["near_dup"] += 1
                     else:
                         row["processing_status"] = "fetched" if f.clean_text else "new"
-                    row.update({"url": f.url, "raw_html": f.raw_html,
+                    # raw_html only for articles that still face processing — storing it
+                    # for near-duplicates blew the DB to 1.5GB (Supabase quota, 20 Jul)
+                    keep_raw = row["processing_status"] != "near_duplicate"
+                    row.update({"url": f.url,
+                                "raw_html": f.raw_html if keep_raw else None,
                                 "clean_text": f.clean_text, "dedup_hash": f.dedup_hash,
                                 "published_at": f.published_at or it.published_at})
                 except Exception as e:
@@ -437,8 +441,25 @@ def cmd_daily(args) -> None:
     stage("geocode", lambda: cmd_geocode(argparse.Namespace(limit=1000, jsonl=False)))
     stage("watch", _watch)
     stage("auto_review", ar.run)
+    def _hygiene():
+        # raw_html has no purpose once an article is terminal; keeping it blew the DB
+        # past the Supabase free quota (1.5GB, 20 Jul). Plain VACUUM keeps the freed
+        # space reusable so the table stops growing.
+        with connect() as conn, conn.cursor() as cur:
+            cur.execute("""update source_article set raw_html = null
+                           where raw_html is not null and processing_status in
+                                 ('extracted','irrelevant','near_duplicate','failed')""")
+            purged = cur.rowcount
+            conn.commit()
+        vc = connect()
+        vc.autocommit = True
+        vc.execute("vacuum source_article")
+        vc.close()
+        return {"raw_html_purged": purged}
+
     stage("recompute", lambda: cmd_recompute(argparse.Namespace()))
     stage("export", export_main)
+    stage("hygiene", _hygiene)
     stats["llm_spend_usd"] = round(llmcost.spent(), 2)
     with connect() as conn, conn.cursor() as cur:
         cur.execute("""update pipeline_run set finished_at=now(), ok=%s,
