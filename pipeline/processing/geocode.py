@@ -209,7 +209,8 @@ def geocode(location_text: str, road_name: str | None = None,
         lat, lon = float(m.group(1)), float(m.group(2))
         if _in_india(lat, lon):
             return {"lat": lat, "lon": lon, "geocode_confidence": 0.95,
-                    "geocode_method": "coords_in_text", "display_name": "coords in text"}
+                    "geocode_method": "coords_in_text", "geocode_qualifier": None,
+                    "display_name": "coords in text"}
     # Anchored = we know a state or district, so _state_ok() can actually validate the
     # hit. Unanchored results are capped below the publish bar (fail closed).
     anchored = bool((admin_state or "").strip() or (admin_district or "").strip())
@@ -223,18 +224,21 @@ def geocode(location_text: str, road_name: str | None = None,
             continue
         if not _state_ok(hit["state"], admin_state):
             continue           # homonym in another state — keep descending the ladder
-        suffix = ""
+        # NOTE: geocode_method is CHECK-constrained to a controlled vocabulary — the
+        # guard signal goes in geocode_qualifier, never as a method suffix (that bug
+        # would have failed every geocode UPDATE; migration 012).
+        qualifier = None
         if not anchored:
-            conf, suffix = min(conf, UNANCHORED_MAX_CONF), "_unanchored"
+            conf, qualifier = min(conf, UNANCHORED_MAX_CONF), "unanchored"
         elif not (hit["state"] or "").strip():
             # the state guard "passed" only because the hit carried no state metadata —
             # unverified is not verified; cap below the publish bar
-            conf, suffix = min(conf, STATELESS_HIT_MAX_CONF), "_stateless_hit"
+            conf, qualifier = min(conf, STATELESS_HIT_MAX_CONF), "stateless_hit"
         if hit.get("span_km", 0.0) > WIDE_AREA_KM:
             # pin is an arbitrary point on a huge feature (e.g. a 47km ring road)
-            conf, suffix = min(conf, WIDE_AREA_MAX_CONF), suffix or "_wide_area"
+            conf, qualifier = min(conf, WIDE_AREA_MAX_CONF), qualifier or "wide_area"
         return {"lat": lat, "lon": lon, "geocode_confidence": conf,
-                "geocode_method": method + suffix,
+                "geocode_method": method, "geocode_qualifier": qualifier,
                 "display_name": hit["display"]}
     return {"lat": None, "lon": None, "geocode_confidence": None,
-            "geocode_method": None, "display_name": None}
+            "geocode_method": None, "geocode_qualifier": None, "display_name": None}

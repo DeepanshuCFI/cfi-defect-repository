@@ -22,6 +22,26 @@ WEIGHTS = {"w1_fatalities_weighted": 0.30, "w2_crash_frequency": 0.25, "w3_recen
 TIERS = {"critical": 75, "high": 50, "medium": 25, "watch": 0}
 
 
+# ---------------------------------------------------------------- geocode vocabulary
+# DB CHECK constraint pins geocode_method to this list (migrations/001, 012).
+ALLOWED_GEOCODE_METHODS = {"coords_in_text", "landmark_district", "road_city",
+                           "city_centroid", "district_centroid", "manual"}
+
+
+def test_geocode_method_always_in_controlled_vocabulary(monkeypatch):
+    """Regression: suffixed methods ('landmark_district_unanchored') violated the DB
+    CHECK constraint and would have failed every geocode UPDATE."""
+    from pipeline.processing import geocode as gc
+    for state, span in (("", 0.5), ("Odisha", 0.5), ("Uttar Pradesh", 47.0)):
+        monkeypatch.setattr(gc, "_resolve", lambda q, s=state, sp=span: {
+            "lat": 27.5, "lon": 78.05, "state": s, "display": "x", "span_km": sp})
+        for kwargs in ({}, {"admin_state": "Uttar Pradesh", "admin_district": "Hathras"}):
+            g = gc.geocode("somewhere", **kwargs)
+            if g["geocode_method"] is not None:
+                assert g["geocode_method"] in ALLOWED_GEOCODE_METHODS, g["geocode_method"]
+            assert g["geocode_qualifier"] in (None, "unanchored", "stateless_hit", "wide_area")
+
+
 # ---------------------------------------------------------------- geocode anchoring
 def test_unanchored_geocode_capped_below_publish_bar(monkeypatch):
     """#276 (2026-07-18): 'near Bisawar village, Vidhipur road,' with NO state geocoded
@@ -33,7 +53,7 @@ def test_unanchored_geocode_capped_below_publish_bar(monkeypatch):
     g = gc.geocode("near Bisawar village, Vidhipur road, ")
     assert g["lat"] is not None
     assert g["geocode_confidence"] <= gc.UNANCHORED_MAX_CONF < 0.6   # -> review, not public
-    assert g["geocode_method"].endswith("_unanchored")
+    assert g["geocode_qualifier"] == "unanchored"
 
 
 def test_anchored_geocode_keeps_full_confidence(monkeypatch):
@@ -43,7 +63,7 @@ def test_anchored_geocode_keeps_full_confidence(monkeypatch):
     g = gc.geocode("near Bisawar village, Vidhipur road", admin_district="Hathras",
                    admin_state="Uttar Pradesh")
     assert g["geocode_confidence"] >= 0.6
-    assert not g["geocode_method"].endswith("_unanchored")
+    assert g["geocode_qualifier"] is None
 
 
 def test_state_guard_still_rejects_wrong_state_when_anchored(monkeypatch):
@@ -61,7 +81,7 @@ def test_stateless_hit_capped(monkeypatch):
         "lat": 27.5, "lon": 78.05, "state": "", "display": "somewhere", "span_km": 0.5})
     g = gc.geocode("near Bisawar village", admin_state="Uttar Pradesh")
     assert g["geocode_confidence"] <= gc.STATELESS_HIT_MAX_CONF < 0.6
-    assert g["geocode_method"].endswith("_stateless_hit")
+    assert g["geocode_qualifier"] == "stateless_hit"
 
 
 def test_wide_area_hit_capped(monkeypatch):
@@ -72,7 +92,7 @@ def test_wide_area_hit_capped(monkeypatch):
         "span_km": 47.0})
     g = gc.geocode("Outer Ring Road", admin_state="Delhi", admin_district="South Delhi")
     assert g["geocode_confidence"] <= gc.WIDE_AREA_MAX_CONF < 0.6
-    assert g["geocode_method"].endswith("_wide_area")
+    assert g["geocode_qualifier"] == "wide_area"
 
 
 def test_dedup_without_locality_never_matches():

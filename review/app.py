@@ -37,7 +37,13 @@ def _users() -> dict[str, str]:
 def reviewer(credentials: HTTPBasicCredentials | None = Depends(_basic)) -> str:
     users = _users()
     if not users:
-        return "reviewer:local"
+        # FAIL CLOSED (audit finding, 19 Jul): if REVIEW_USERS is lost/mistyped on
+        # Render, open mode would expose a publish/reject console to the internet.
+        # Local dev must opt in explicitly.
+        if os.environ.get("REVIEW_ALLOW_OPEN") == "1":
+            return "reviewer:local"
+        raise HTTPException(503, "REVIEW_USERS is not configured — refusing to serve "
+                                 "an unauthenticated review console")
     if credentials:
         expected = users.get(credentials.username)
         if expected and _secrets.compare_digest(credentials.password, expected):
