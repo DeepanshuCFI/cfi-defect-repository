@@ -73,6 +73,11 @@
       "llm_budget_usd_per_day": 1.95,
       "extraction_budget_share": 0.5
     },
+    "health": {
+      "db_size_alert_mb": 400,
+      "queue_depth_alert": 4000,
+      "new_stuck_alert": 15000
+    },
     "models_pricing": {
       "_comment": "USD per million tokens; keep in sync with anthropic.com/pricing",
       "claude-sonnet-5": { "in": 3.0, "out": 15.0 },

@@ -68,11 +68,11 @@ def collect_district(d: dict, store, args) -> dict:
                         stats["near_dup"] += 1
                     else:
                         row["processing_status"] = "fetched" if f.clean_text else "new"
-                    # raw_html only for articles that still face processing — storing it
-                    # for near-duplicates blew the DB to 1.5GB (Supabase quota, 20 Jul)
-                    keep_raw = row["processing_status"] != "near_duplicate"
-                    row.update({"url": f.url,
-                                "raw_html": f.raw_html if keep_raw else None,
+                    # raw_html is NEVER stored: nothing in the pipeline reads it back
+                    # (extraction/review/watch all use clean_text), and hoarding it blew
+                    # the DB to 1.5GB and a disk-full outage (18 Jul). URLs allow
+                    # re-fetching if a page is ever needed again.
+                    row.update({"url": f.url, "raw_html": None,
                                 "clean_text": f.clean_text, "dedup_hash": f.dedup_hash,
                                 "published_at": f.published_at or it.published_at})
                 except Exception as e:
@@ -446,9 +446,9 @@ def cmd_daily(args) -> None:
         # past the Supabase free quota (1.5GB, 20 Jul). Plain VACUUM keeps the freed
         # space reusable so the table stops growing.
         with connect() as conn, conn.cursor() as cur:
+            # belt-and-suspenders: raw_html should never be stored at all now
             cur.execute("""update source_article set raw_html = null
-                           where raw_html is not null and processing_status in
-                                 ('extracted','irrelevant','near_duplicate','failed')""")
+                           where raw_html is not null""")
             purged = cur.rowcount
             conn.commit()
         vc = connect()
@@ -457,9 +457,11 @@ def cmd_daily(args) -> None:
         vc.close()
         return {"raw_html_purged": purged}
 
+    from pipeline.processing import health
     stage("recompute", lambda: cmd_recompute(argparse.Namespace()))
     stage("export", export_main)
     stage("hygiene", _hygiene)
+    stage("health", health.run)
     stats["llm_spend_usd"] = round(llmcost.spent(), 2)
     with connect() as conn, conn.cursor() as cur:
         cur.execute("""update pipeline_run set finished_at=now(), ok=%s,
