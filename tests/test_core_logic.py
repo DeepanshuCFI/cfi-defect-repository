@@ -22,6 +22,30 @@ WEIGHTS = {"w1_fatalities_weighted": 0.30, "w2_crash_frequency": 0.25, "w3_recen
 TIERS = {"critical": 75, "high": 50, "medium": 25, "watch": 0}
 
 
+# ---------------------------------------------------------------- budget split
+from pipeline.llmcost import extraction_share  # noqa: E402
+
+
+def test_extraction_share_scales_with_adjudication_demand():
+    b = 1.95
+    # light day (measured 19-20 Jul: ~20 pending) -> extraction gets most of the budget
+    light = extraction_share(20 + 30, b)
+    # heavy backlog -> reserve grows, but never past the cap
+    heavy = extraction_share(500, b)
+    assert light > heavy
+    assert 0.5 <= light <= 0.85
+    assert math.isclose(heavy, 0.5)          # cap: adjudication never takes >50%
+
+
+def test_extraction_share_floor_protects_adjudication():
+    # zero pending must still reserve the floor — new incidents this run need review
+    assert math.isclose(extraction_share(0, 1.95), 0.85)
+
+
+def test_extraction_share_survives_zero_budget():
+    assert extraction_share(10, 0) == 0.5
+
+
 # ---------------------------------------------------------------- geocode vocabulary
 # DB CHECK constraint pins geocode_method to this list (migrations/001, 012).
 ALLOWED_GEOCODE_METHODS = {"coords_in_text", "landmark_district", "road_city",

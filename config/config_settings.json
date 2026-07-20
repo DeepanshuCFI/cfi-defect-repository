@@ -71,7 +71,11 @@
       "tiered_extraction": true,
       "skip_pure_crashes": false,
       "llm_budget_usd_per_day": 1.95,
-      "extraction_budget_share": 0.5
+      "extraction_budget_share": 0.5,
+      "adjudication_cost_per_item_usd": 0.015,
+      "adjudication_new_allowance": 30,
+      "adjudication_reserve_floor": 0.15,
+      "adjudication_reserve_cap": 0.5
     },
     "health": {
       "db_size_alert_mb": 400,

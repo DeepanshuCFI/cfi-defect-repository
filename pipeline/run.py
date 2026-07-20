@@ -167,10 +167,34 @@ def cmd_process(args) -> None:
         stats = {"prefiltered": 0, "irrelevant": 0, "extracted": 0, "extracted_light": 0,
                  "skipped_pure_crash": 0, "failed": 0, "snippets_dropped": 0}
         from pipeline import llmcost
-        # extraction may spend only its SHARE of the daily budget; the rest is reserved
-        # for adjudication (which gates publication). Without this, extraction ate 100%
-        # and nothing new ever published (11-14 Jul map freeze).
-        ext_share = float(proc_cfg.get("extraction_budget_share", 0.5))
+        # Extraction may spend only its SHARE of the daily budget; the rest is reserved
+        # for adjudication (which gates publication) — without a reserve, extraction ate
+        # 100% and nothing published (11-14 Jul map freeze). The reserve is now SIZED TO
+        # DEMAND rather than a flat 50%, which was leaving ~35% of the budget unspent
+        # while the extraction queue grew (measured 19-20 Jul).
+        pending_adj = 0
+        try:
+            from pipeline.db import connect as _c
+            with _c() as _conn, _conn.cursor() as _cur:
+                _cur.execute("""select count(*) from incident i
+                                join source_article a on a.id = i.primary_source_id
+                                where i.verification_status = 'auto'
+                                  and a.clean_text is not null""")
+                pending_adj = int(_cur.fetchone()[0])
+        except Exception as e:            # jsonl/no-DB mode: fall back to the flat split
+            print(f"  (reserve sizing unavailable: {e}; using configured share)")
+            pending_adj = -1
+        if pending_adj >= 0:
+            ext_share = llmcost.extraction_share(
+                pending_adj + int(proc_cfg.get("adjudication_new_allowance", 30)),
+                llmcost.budget(),
+                float(proc_cfg.get("adjudication_cost_per_item_usd", 0.015)),
+                float(proc_cfg.get("adjudication_reserve_floor", 0.15)),
+                float(proc_cfg.get("adjudication_reserve_cap", 0.5)))
+            print(f"  budget split: {pending_adj} adjudications pending -> extraction "
+                  f"gets {ext_share*100:.0f}% (${llmcost.budget()*ext_share:.2f})")
+        else:
+            ext_share = float(proc_cfg.get("extraction_budget_share", 0.5))
         for n_done, a in enumerate(arts):
             if llmcost.over(ext_share):
                 print(f"  EXTRACTION BUDGET STOP: ${llmcost.spent():.2f} >= "

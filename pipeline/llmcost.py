@@ -47,6 +47,23 @@ def budget() -> float:
     return float(p.get("llm_budget_usd_per_day", p.get("llm_budget_usd_per_run", 2.0)))
 
 
+def extraction_share(pending_adjudications: int, budget_usd: float,
+                     per_item_usd: float = 0.015, floor: float = 0.15,
+                     cap: float = 0.5) -> float:
+    """Share of the daily budget extraction may spend, given how much adjudication
+    actually has to do today. Pure + unit-tested.
+
+    A FIXED 50/50 split (15 Jul) was starving extraction: measured adjudication needs
+    only ~$0.012/item, so on a typical day it used ~$0.28 of its reserved ~$0.97 and
+    the pipeline left ~35% of the budget unspent while the queue grew. Reserve what is
+    needed, hand the rest to extraction.
+    """
+    if budget_usd <= 0:
+        return 1.0 - cap
+    reserve = (max(0, pending_adjudications) * per_item_usd) / budget_usd
+    return 1.0 - min(cap, max(floor, reserve))
+
+
 def over(share: float = 1.0) -> bool:
     """True once spend reaches `share` of the daily budget. Extraction passes a share
     < 1 so it can never consume the whole budget and starve adjudication (which gates
