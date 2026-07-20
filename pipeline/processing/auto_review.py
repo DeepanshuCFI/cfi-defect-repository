@@ -138,8 +138,11 @@ def run(limit: int = 200) -> dict:
             try:
                 verdict = adjudicate(text, ext)
             except Exception as e:
+                from pipeline.run import _raise_if_credential_error
+                _raise_if_credential_error(e)   # dead key must fail the run, not the item
                 if "reached your specified api usage limits" in str(e).lower():
                     print("  API MONTHLY LIMIT hit — stopping; queue waits for tomorrow")
+                    stats["api_limit_hit"] = True
                     break
                 print(f"  WARN auto-review failed #{iid}: {e}")
                 stats["errors"] += 1

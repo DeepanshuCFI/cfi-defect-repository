@@ -49,16 +49,24 @@ def collect_checks() -> list[tuple[str, bool, str]]:
                     f"unprocessed 'new' articles {new} (alert at {cfg['new_stuck_alert']})"))
 
         cur.execute("""select coalesce((stage_stats->'auto_review'->>'auto_published')::int, 0),
-                              coalesce((stage_stats->>'llm_spend_usd')::numeric, 0)
+                              coalesce((stage_stats->>'llm_spend_usd')::numeric, 0),
+                              coalesce((stage_stats->'process'->>'extracted')::int, 0)
+                            + coalesce((stage_stats->'process'->>'extracted_light')::int, 0)
                        from pipeline_run where ok is not null
                        order by id desc limit 1""")
         row = cur.fetchone()
         if row:
-            pub, spend = int(row[0]), float(row[1])
+            pub, spend, extracted = int(row[0]), float(row[1]), int(row[2])
             # the 11-14 Jul freeze: runs "succeeded" while publishing nothing.
             out.append(("publishing_alive", pub > 0 or spend < 0.10,
                         f"last run auto-published {pub} (spend ${spend:.2f}) — "
                         "0 published at real spend means the adjudicator is starved"))
+            # declared in DEFAULTS but never implemented until now (audit finding):
+            # 0 extractions while a queue exists = dead key / blocked API / broken stage
+            out.append(("extraction_alive", extracted >= cfg["min_extracted_last_run"]
+                        or fetched == 0,
+                        f"last run extracted {extracted} with {fetched} queued "
+                        f"(alert below {cfg['min_extracted_last_run']})"))
     return out
 
 

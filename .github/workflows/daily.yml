@@ -10,6 +10,9 @@ concurrency:
   group: daily-pipeline
   cancel-in-progress: false
 
+permissions:
+  contents: write        # heartbeat commit keeps the cron alive (see below)
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -45,6 +48,17 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      # data/ is gitignored, so without this every run starts with a COLD geocode
+      # cache and re-buys the same Mapbox/Nominatim lookups daily (audit finding).
+      - name: Restore geocode cache
+        if: steps.guard.outputs.go == 'yes'
+        uses: actions/cache@v4
+        with:
+          path: data/geocode_cache.json
+          key: geocode-cache-${{ github.run_id }}
+          restore-keys: |
+            geocode-cache-
+
       - name: Install dependencies
         if: steps.guard.outputs.go == 'yes'
         run: pip install -r requirements.txt
@@ -67,11 +81,36 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: python -m pipeline.run daily --days 2
 
-      - name: Deploy dashboard to Vercel
-        # deploys even when a pipeline stage failed: export always runs (run.py stage
-        # guards), and gate-passed data is always safe to publish. Stale site was the
-        # real failure mode (run #9).
+      # Never deploy a dataless build over a good site: if export failed upstream,
+      # web/public/data can be missing/empty and we would publish an empty map
+      # with a green check (audit finding, 19 Jul).
+      - name: Verify export output before deploy
+        id: exportcheck
         if: ${{ steps.guard.outputs.go == 'yes' && !cancelled() }}
+        run: |
+          ok=yes
+          for f in web/public/data/meta.json web/public/data/hotspots.geojson \
+                   web/public/data/incidents.json; do
+            if [ ! -s "$f" ]; then echo "MISSING/EMPTY: $f"; ok=no; fi
+          done
+          # a hotspots file with zero features is also a red flag, not a deploy
+          python3 -c "
+          import json, sys
+          try:
+              n = len(json.load(open('web/public/data/hotspots.geojson'))['features'])
+          except Exception as e:
+              print('unreadable hotspots.geojson:', e); sys.exit(1)
+          print('hotspot features:', n)
+          sys.exit(1 if n == 0 else 0)
+          " || ok=no
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          [ "$ok" = "yes" ] || echo "::warning::refusing to deploy — export output missing or empty"
+
+      - name: Deploy dashboard to Vercel
+        # deploys even when a pipeline stage failed (gate-passed data is always safe to
+        # publish, and a stale site was the run #9 failure mode) — but ONLY when the
+        # export actually produced data.
+        if: ${{ steps.guard.outputs.go == 'yes' && !cancelled() && steps.exportcheck.outputs.ok == 'yes' }}
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -80,3 +119,18 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"
+
+      # GitHub disables scheduled workflows after 60 days with NO repository activity.
+      # This pipeline writes only to Supabase/Vercel, so a quiet stretch would silently
+      # kill the cron (audit finding). A dated heartbeat is both the keep-alive and a
+      # public record of runs.
+      - name: Heartbeat commit (keeps the schedule from auto-disabling)
+        if: ${{ steps.guard.outputs.go == 'yes' && !cancelled() }}
+        run: |
+          mkdir -p docs
+          date -u '+{"last_run_utc": "%Y-%m-%dT%H:%M:%SZ"}' > docs/last_run.json
+          git config user.name  "cfi-pipeline[bot]"
+          git config user.email "pipeline@crashfreeindia.org"
+          git add docs/last_run.json
+          git diff --staged --quiet || git commit -m "chore: pipeline heartbeat [skip ci]"
+          git push || echo "::warning::heartbeat push failed (cron keep-alive at risk)"

@@ -121,6 +121,7 @@ def cmd_collect(args) -> None:
                 total[k] = total.get(k, 0) + v
         print(f"\nTOTAL {total}")
         print("store counts:", store.counts())
+        return total
     finally:
         store.close()
 
@@ -129,6 +130,20 @@ def _api_limit_hit(e: Exception) -> bool:
     """The Anthropic monthly spend-limit refusal — treat as 'stop for today', never as
     per-article failure (2026-07-13: 424 good articles were WARN'd through it)."""
     return "reached your specified api usage limits" in str(e).lower()
+
+
+class ApiCredentialError(RuntimeError):
+    """A dead/revoked/forbidden API key. Must be RUN-FATAL, never per-article: a
+    silently-invalid key produced green runs that collected articles and extracted
+    nothing (audit finding, 19 Jul)."""
+
+
+def _raise_if_credential_error(e: Exception) -> None:
+    name = type(e).__name__
+    if name in ("AuthenticationError", "PermissionDeniedError"):
+        raise ApiCredentialError(f"{name}: {str(e)[:200]}") from e
+    if getattr(e, "status_code", None) in (401, 403):
+        raise ApiCredentialError(f"HTTP {e.status_code}: {str(e)[:200]}") from e
 
 
 def cmd_process(args) -> None:
@@ -175,8 +190,10 @@ def cmd_process(args) -> None:
             try:
                 cls = rel.classify(title, text)
             except Exception as e:
+                _raise_if_credential_error(e)
                 if _api_limit_hit(e):
                     print("  API MONTHLY LIMIT hit — stopping; queue waits for tomorrow")
+                    stats["api_limit_hit"] = True
                     break
                 print(f"  WARN relevance failed #{a['id']}: {e}")
                 stats["failed"] += 1
@@ -199,8 +216,10 @@ def cmd_process(args) -> None:
                                           published_at=str(a.get("published_at") or "") or None,
                                           light=light)
             except Exception as e:
+                _raise_if_credential_error(e)
                 if _api_limit_hit(e):
                     print("  API MONTHLY LIMIT hit — stopping; queue waits for tomorrow")
+                    stats["api_limit_hit"] = True
                     break
                 print(f"  WARN extraction failed #{a['id']}: {e}")
                 store.set_article_status(a["id"], "failed")
@@ -407,11 +426,15 @@ def cmd_daily(args) -> None:
             print(f"STAGE FAILED ({err})")
 
     def _collect():
+        agg: dict = {}
         for st in states:
-            cmd_collect(argparse.Namespace(
+            t = cmd_collect(argparse.Namespace(
                 district=None, state=st, gdelt=None, timespan="1d",
                 days=args.days, max_per_query=15, lang_terms=3,
-                delay=2.0, no_fetch=False, jsonl=False))
+                delay=2.0, no_fetch=False, jsonl=False)) or {}
+            for k, v in t.items():
+                agg[k] = agg.get(k, 0) + v
+        return agg
 
     from pipeline import llmcost
     from pipeline.processing import auto_review as ar
@@ -465,6 +488,36 @@ def cmd_daily(args) -> None:
     stage("hygiene", _hygiene)
     stage("health", health.run)
     stats["llm_spend_usd"] = round(llmcost.spent(), 2)
+
+    # CANARIES (audit finding, 19 Jul): a run that collects nothing, extracts nothing,
+    # or exports nothing used to exit 0 with a green check — the failure mode that hid
+    # the 13 Jul API-limit trip and would hide blocked RSS or a dead decoder. Any
+    # canary tripping flips ok=False, which raises SystemExit(1) -> GitHub failure email.
+    canaries = []
+    c_stats = stats.get("collect")
+    if isinstance(c_stats, dict) and c_stats.get("new", 0) == 0:
+        canaries.append("collect produced 0 new articles (RSS blocked / decoder dead?)")
+
+    p_stats = stats.get("process")
+    if isinstance(p_stats, dict):
+        did_work = (p_stats.get("extracted", 0) + p_stats.get("extracted_light", 0)
+                    + p_stats.get("irrelevant", 0) + p_stats.get("prefiltered", 0))
+        budget_stopped = llmcost.over(0.9) or p_stats.get("api_limit_hit")
+        if did_work == 0 and not budget_stopped:
+            canaries.append("process handled 0 articles with budget remaining "
+                            "(queue empty, or extraction is broken)")
+        if p_stats.get("api_limit_hit"):
+            canaries.append("Anthropic monthly spend limit was hit — raise the console "
+                            "limit or the pipeline stalls until month end")
+
+    if stats.get("export") == "FAILED":
+        canaries.append("export failed — the deployed site may be stale or empty")
+
+    if canaries:
+        ok = False
+        stats["canaries"] = canaries
+        for c in canaries:
+            print(f"CANARY: {c}")
     with connect() as conn, conn.cursor() as cur:
         cur.execute("""update pipeline_run set finished_at=now(), ok=%s,
                        stage_stats=%s::jsonb where id=%s""",
