@@ -155,15 +155,21 @@ def cmd_process(args) -> None:
     proc_cfg = configload.settings().get("processing", {})
     store = get_store(force_jsonl=args.jsonl)
     try:
-        arts = store.articles_by_status("fetched", limit=args.limit)
         # budget goes to the mission-critical class first: defect-vocabulary stories are
         # processed before behaviour-only crash reports, so a budget stop cuts the
         # lowest-value tail (owner: ok to miss a few entries to stay under $2/day).
+        # The ranking MUST happen in the store, across the WHOLE queue: sorting the rows
+        # after loading only re-orders the oldest `limit` of them, which quietly undid the
+        # whole mechanism once the backlog outgrew the window (31 Jul 2026 — 580 of 601
+        # defect articles sat outside it while the budget chewed the 18-20 Jul tail).
         defect_terms = [t for lang in configload.keywords().values()
                         for t in lang.get("infra_defect", [])]
-        arts.sort(key=lambda a: 0 if any(
-            t in (a.get("clean_text") or "") for t in defect_terms) else 1)
-        print(f"processing {len(arts)} fetched article(s)…")
+        arts = store.articles_by_status("fetched", limit=args.limit,
+                                        priority_terms=defect_terms)
+        n_priority = sum(1 for a in arts if any(
+            t in (a.get("clean_text") or "") for t in defect_terms))
+        print(f"processing {len(arts)} fetched article(s) "
+              f"({n_priority} defect-vocabulary, first in line)…")
         stats = {"prefiltered": 0, "irrelevant": 0, "extracted": 0, "extracted_light": 0,
                  "skipped_pure_crash": 0, "failed": 0, "snippets_dropped": 0}
         from pipeline import llmcost
