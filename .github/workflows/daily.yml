@@ -59,6 +59,19 @@ jobs:
           restore-keys: |
             geocode-cache-
 
+      # Same reason, higher stakes: a cold Google-News URL cache means every run
+      # re-resolves the ~73% of feed items already in the DB, which is what drove the
+      # run into Google's throttle around 45% in and silently dropped the remaining
+      # ~800-1300 articles/day (31 Jul 2026). Warm cache = calls only for new articles.
+      - name: Restore Google News URL cache
+        if: steps.guard.outputs.go == 'yes'
+        uses: actions/cache@v4
+        with:
+          path: data/gnews_url_cache.json
+          key: gnews-url-cache-${{ github.run_id }}
+          restore-keys: |
+            gnews-url-cache-
+
       - name: Install dependencies
         if: steps.guard.outputs.go == 'yes'
         run: pip install -r requirements.txt

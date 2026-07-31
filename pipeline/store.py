@@ -105,6 +105,41 @@ class DBStore:
                         (status, article_id))
         self.conn.commit()
 
+    def unresolved_articles(self, limit: int = 200) -> list[dict]:
+        """'new' rows still holding a Google News redirector — resolution was throttled
+        at collection time so they were never fetched, and nothing retried them (19,831
+        had accumulated by 31 Jul 2026). Newest first: Google News ids age out of the
+        feed window and publisher URLs rot, so a recent miss is likeliest to recover."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """select id, url, state, district, language
+                   from source_article
+                   where processing_status = 'new' and url like %s
+                   order by id desc limit %s""", ("%news.google.com%", limit))
+            cols = [d.name for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    def update_article_fetch(self, article_id, url: str, clean_text: str,
+                             dedup_hash: str, published_at, status: str) -> None:
+        """Attach a late fetch to an existing row. `url` is unique-constrained, and a
+        redirect can land on a URL another article already occupies — keep the old URL
+        rather than lose the fetch."""
+        sql = """update source_article
+                    set clean_text=%s, dedup_hash=%s,
+                        published_at=coalesce(%s, published_at),
+                        fetched_at=now(), processing_status=%s{url_set}
+                  where id=%s"""
+        common = (clean_text, dedup_hash, published_at, status)
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(sql.format(url_set=", url=%s"), (*common, url, article_id))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()                      # url taken — keep the old one
+            with self.conn.cursor() as cur:
+                cur.execute(sql.format(url_set=""), (*common, article_id))
+            self.conn.commit()
+
     def insert_incident(self, inc: dict, defects: list[dict], article_id) -> int:
         inc = coerce_incident(inc)
         cols = ", ".join(INCIDENT_FIELDS)
@@ -223,6 +258,26 @@ class JsonlStore:
         for r in self._rows:
             if r["id"] == article_id:
                 r["processing_status"] = status
+        self._flush()
+
+    def unresolved_articles(self, limit: int = 200) -> list[dict]:
+        out = [dict(r) for r in self._rows
+               if r.get("processing_status") == "new"
+               and "news.google.com" in (r.get("url") or "")]
+        return out[::-1][:limit]                       # newest first, as in DBStore
+
+    def update_article_fetch(self, article_id, url: str, clean_text: str,
+                             dedup_hash: str, published_at, status: str) -> None:
+        taken = {r["url"] for r in self._rows if r["id"] != article_id}
+        for r in self._rows:
+            if r["id"] == article_id:
+                if url not in taken:
+                    r["url"] = url
+                r.update({"clean_text": clean_text, "dedup_hash": dedup_hash,
+                          "processing_status": status,
+                          "published_at": published_at or r.get("published_at"),
+                          "fetched_at": datetime.now(timezone.utc).isoformat()})
+        self._urls = {r["url"] for r in self._rows}
         self._flush()
 
     def set_incident_status(self, incident_id, status: str, note: str) -> None:

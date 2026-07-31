@@ -120,8 +120,75 @@ def cmd_collect(args) -> None:
             for k, v in st.items():
                 total[k] = total.get(k, 0) + v
         print(f"\nTOTAL {total}")
+        print(f"resolver: {rss.STATS}")
         print("store counts:", store.counts())
+        rss.save_cache()
         return total
+    finally:
+        store.close()
+
+
+def cmd_retry_unresolved(args) -> dict:
+    """Recover articles whose Google News link was left unresolved by the throttle.
+
+    Nothing used to retry these: collect() stores them 'new' with the google URL, and
+    every later stage reads 'fetched'. They simply accumulated (19,831 by 31 Jul 2026,
+    ~800-1300/day). Resolution is free of LLM budget, so this runs every day; it stops
+    early once the resolver trips its breaker rather than burning the run on calls
+    Google is already refusing."""
+    store = get_store(force_jsonl=args.jsonl)
+    ham_max = configload.settings().get("dedup", {}).get("simhash_hamming_max", 3)
+    stats = {"tried": 0, "resolved": 0, "fetched": 0, "dup_url": 0, "near_dup": 0,
+             "no_text": 0, "robots": 0, "errors": 0, "still_unresolved": 0}
+    try:
+        # collect() may have tripped the breaker minutes ago; give the sweep its own
+        # chance. Being wrong costs FAILURE_STREAK_TRIP failed calls, then it stops.
+        rss.reset_breaker()
+        rows = store.unresolved_articles(limit=args.limit)
+        print(f"retrying {len(rows)} unresolved article(s)…")
+        for a in rows:
+            if rss.throttled():
+                print("  resolver throttled — stopping; the rest wait for the next run")
+                break
+            stats["tried"] += 1
+            url, ok = rss.resolve_url(a["url"])
+            if not ok:
+                stats["still_unresolved"] += 1
+                continue
+            stats["resolved"] += 1
+            if store.seen_url(url):        # a sibling google link already resolved here
+                store.set_article_status(a["id"], "near_duplicate")
+                stats["dup_url"] += 1
+                continue
+            try:
+                f = fetch_article(url, delay_s=args.delay)
+            except Exception as e:
+                print(f"  WARN fetch failed {url[:60]}: {e}")
+                stats["errors"] += 1
+                continue
+            if f.blocked_by_robots:
+                store.set_article_status(a["id"], "failed")
+                stats["robots"] += 1
+                continue
+            if not f.clean_text:
+                # resolved but nothing extractable — record the publisher URL and retire
+                # it, so no later sweep re-spends a Google call on the same dead end
+                store.update_article_fetch(a["id"], f.url, "", "", f.published_at,
+                                           "failed")
+                stats["no_text"] += 1
+                continue
+            status = "fetched"
+            if store.near_duplicate(f.dedup_hash, district=a.get("district"),
+                                    state=a.get("state"), hamming_max=ham_max):
+                status = "near_duplicate"
+                stats["near_dup"] += 1
+            else:
+                stats["fetched"] += 1
+            store.update_article_fetch(a["id"], f.url, f.clean_text, f.dedup_hash,
+                                       f.published_at, status)
+        rss.save_cache()
+        print(f"DONE {stats} · resolver {rss.STATS}")
+        return stats
     finally:
         store.close()
 
@@ -464,6 +531,8 @@ def cmd_daily(args) -> None:
                 delay=2.0, no_fetch=False, jsonl=False)) or {}
             for k, v in t.items():
                 agg[k] = agg.get(k, 0) + v
+        # resolver counters are module-level and cumulative across the three states
+        agg["resolver"] = dict(rss.STATS)
         return agg
 
     from pipeline import llmcost
@@ -492,6 +561,10 @@ def cmd_daily(args) -> None:
             store.close()
 
     stage("collect", _collect)
+    # Runs AFTER collect so fresh articles get the unthrottled quota first, and before
+    # process so anything recovered is extractable in the same run. Costs no LLM budget.
+    stage("retry_unresolved", lambda: cmd_retry_unresolved(argparse.Namespace(
+        limit=300, delay=2.0, jsonl=False)))
     stage("process", lambda: cmd_process(argparse.Namespace(limit=1000, jsonl=False)))
     stage("geocode", lambda: cmd_geocode(argparse.Namespace(limit=1000, jsonl=False)))
     stage("watch", _watch)
@@ -527,6 +600,18 @@ def cmd_daily(args) -> None:
     c_stats = stats.get("collect")
     if isinstance(c_stats, dict) and c_stats.get("new", 0) == 0:
         canaries.append("collect produced 0 new articles (RSS blocked / decoder dead?)")
+
+    # The 'new == 0' canary above could never catch the throttle: collect kept producing
+    # ~1,400 rows/day while over half of them were unresolved and therefore unfetchable.
+    # Judge the resolver on its own success rate, not on the row count. (31 Jul 2026)
+    r_stats = (c_stats or {}).get("resolver") if isinstance(c_stats, dict) else None
+    if isinstance(r_stats, dict):
+        attempted = r_stats.get("ok", 0) + r_stats.get("failed", 0)
+        if attempted >= 50 and r_stats["ok"] / attempted < 0.5:
+            canaries.append(
+                f"Google News resolver failed {r_stats['failed']}/{attempted} attempts "
+                f"({r_stats.get('skipped_throttled', 0)} more skipped after the breaker "
+                f"tripped) — those articles cannot be fetched and are being dropped")
 
     p_stats = stats.get("process")
     if isinstance(p_stats, dict):
@@ -573,6 +658,13 @@ def main() -> None:
     c.add_argument("--no-fetch", action="store_true", help="list/insert URLs, skip body fetch")
     c.add_argument("--jsonl", action="store_true", help="force file storage (no DB)")
     c.set_defaults(func=cmd_collect)
+
+    ru = sub.add_parser("retry-unresolved",
+                        help="re-resolve + fetch articles the Google throttle left 'new'")
+    ru.add_argument("--limit", type=int, default=300)
+    ru.add_argument("--delay", type=float, default=2.0, help="per-domain delay (s)")
+    ru.add_argument("--jsonl", action="store_true", help="force file storage (no DB)")
+    ru.set_defaults(func=cmd_retry_unresolved)
 
     pr = sub.add_parser("process", help="Phase 3: relevance + extraction")
     pr.add_argument("--limit", type=int, default=50)
