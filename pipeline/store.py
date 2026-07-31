@@ -75,13 +75,27 @@ class DBStore:
         from pipeline.db import connect
         self.conn = connect()
 
-    def articles_by_status(self, status: str, limit: int = 100) -> list[dict]:
+    def articles_by_status(self, status: str, limit: int = 100,
+                           priority_terms: list[str] | None = None) -> list[dict]:
+        """priority_terms: articles containing any of these sort FIRST, across the WHOLE
+        queue. Without it the caller gets the oldest `limit` rows by id and can only
+        re-order within that window — which silently starves the queue once the backlog
+        outgrows it (measured 31 Jul 2026: the oldest-1000 window held 21 of the 601
+        defect-vocabulary articles; the other 580 were never loaded, so the budget was
+        spent on the behaviour-crash tail while real defect reports aged out of reach)."""
+        cols_sql = """select id, url, outlet_name, language, state, district, clean_text,
+                             published_at
+                      from source_article where processing_status = %s"""
         with self.conn.cursor() as cur:
-            cur.execute(
-                """select id, url, outlet_name, language, state, district, clean_text,
-                          published_at
-                   from source_article where processing_status = %s
-                   order by id limit %s""", (status, limit))
+            if priority_terms:
+                # strpos, not LIKE: terms are 13-language and would need % / _ escaping.
+                # Case-sensitive, matching the caller's own substring test.
+                cur.execute(cols_sql + """
+                       order by (exists (select 1 from unnest(%s::text[]) as t(term)
+                                         where strpos(clean_text, t.term) > 0)) desc, id
+                       limit %s""", (status, list(priority_terms), limit))
+            else:
+                cur.execute(cols_sql + " order by id limit %s", (status, limit))
             cols = [d.name for d in cur.description]
             return [dict(zip(cols, r)) for r in cur.fetchall()]
 
@@ -189,17 +203,21 @@ class JsonlStore:
             self._rows = [json.loads(l) for l in self.path.read_text().splitlines() if l]
         self._urls = {r["url"] for r in self._rows}
 
-    def articles_by_status(self, status: str, limit: int = 100) -> list[dict]:
+    def articles_by_status(self, status: str, limit: int = 100,
+                           priority_terms: list[str] | None = None) -> list[dict]:
         out = []
         for r in self._rows:
             if r.get("processing_status") == status:
                 rec = dict(r)
-                raw = self.raw_dir / f"{r['id']}.html"
                 rec.setdefault("clean_text", rec.get("clean_text"))
                 out.append(rec)
-            if len(out) >= limit:
-                break
-        return out
+            if not priority_terms and len(out) >= limit:
+                break                      # unprioritised: first `limit` matches is fine
+        if priority_terms:
+            # same rule as the SQL path: whole queue ranked before the window is cut
+            out.sort(key=lambda a: 0 if any(
+                t in (a.get("clean_text") or "") for t in priority_terms) else 1)
+        return out[:limit]
 
     def set_article_status(self, article_id, status: str) -> None:
         for r in self._rows:

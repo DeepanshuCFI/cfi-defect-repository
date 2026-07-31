@@ -324,3 +324,47 @@ def test_autoreview_crash_only():
 
 def test_autoreview_needs_human_never_acts():
     assert decide({"verdict": "needs_human", "confidence": 0.99}, 0.9) is None
+
+
+# ------------------------------------------------- process-queue priority (31 Jul 2026)
+# The defect-first ordering must rank the WHOLE queue, not the slice already loaded.
+# Regression: cmd_process sorted rows AFTER `order by id limit 1000` fetched them, so on
+# 31 Jul the window held 21 of 601 defect-vocabulary articles and the other 580 were
+# invisible to the budget — it spent the day on the oldest behaviour-crash tail instead.
+from pipeline.store import JsonlStore  # noqa: E402
+
+DEFECT = ["pothole", "गड्ढा"]
+
+
+def _queue(*texts):
+    """A JsonlStore over synthetic rows, no filesystem touched."""
+    s = object.__new__(JsonlStore)
+    s._rows = [{"id": i, "processing_status": "fetched", "clean_text": t}
+               for i, t in enumerate(texts)]
+    return s
+
+
+def test_priority_reaches_past_the_window():
+    # 3 filler rows then a defect row, window of 3: the defect row must still surface
+    q = _queue("bike skidded", "lorry overturned", "driver dozed off", "deep pothole here")
+    got = q.articles_by_status("fetched", limit=3, priority_terms=DEFECT)
+    assert [a["id"] for a in got][0] == 3, "defect article outside the window was starved"
+
+
+def test_priority_is_fifo_within_each_group():
+    q = _queue("गड्ढा one", "speeding", "pothole two", "overtaking", "गड्ढा three")
+    got = [a["id"] for a in q.articles_by_status("fetched", limit=5, priority_terms=DEFECT)]
+    assert got == [0, 2, 4, 1, 3]          # defect block id-ascending, then the tail
+
+
+def test_priority_terms_absent_keeps_plain_order():
+    q = _queue("pothole", "speeding", "गड्ढा")
+    assert [a["id"] for a in q.articles_by_status("fetched", limit=2)] == [0, 1]
+
+
+def test_priority_tolerates_missing_clean_text():
+    s = object.__new__(JsonlStore)
+    s._rows = [{"id": 0, "processing_status": "fetched", "clean_text": None},
+               {"id": 1, "processing_status": "fetched", "clean_text": "pothole"}]
+    got = [a["id"] for a in s.articles_by_status("fetched", limit=2, priority_terms=DEFECT)]
+    assert got == [1, 0]
