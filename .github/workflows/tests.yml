@@ -1,0 +1,42 @@
+name: tests
+
+# Until now nothing ran the suite in CI: daily.yml is schedule/dispatch-only and
+# check-secrets.yml is dispatch-only, so a pull request showed "Checks 0" and the
+# 50 tests only ever ran on a developer's machine. The suite is pure decision logic
+# with stubbed I/O — no DB, no network, no API key — so it can gate every PR for
+# free and without touching a single secret.
+on:
+  pull_request:
+  push:
+    branches: [main]        # post-merge check; PR branches are covered by pull_request
+  workflow_dispatch: {}
+
+permissions:
+  contents: read            # least privilege: this job only ever reads the tree
+
+concurrency:                # a force-push supersedes the run it obsoleted
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10     # suite runs in <1s; the budget is dependency install
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Full requirements.txt rather than a hand-picked subset: an unimportable
+      # module or a broken pin is exactly the kind of breakage this should catch
+      # before the nightly run finds it.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Deliberately no `env:` block. If a test ever needs a secret to pass, it has
+      # stopped being a unit test — keep that pressure on by never granting one here.
+      - name: Run tests
+        run: python -m pytest tests/ -q
