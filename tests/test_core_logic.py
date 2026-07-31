@@ -368,3 +368,104 @@ def test_priority_tolerates_missing_clean_text():
                {"id": 1, "processing_status": "fetched", "clean_text": "pothole"}]
     got = [a["id"] for a in s.articles_by_status("fetched", limit=2, priority_terms=DEFECT)]
     assert got == [1, 0]
+
+
+# ------------------------------------------------ Google News resolver (31 Jul 2026)
+# Google throttles the batchexecute decoder partway through a large run; the failure
+# used to be swallowed whole, so >half of each day's collection was stored unresolved
+# and never fetched or retried. Guards: repeats must never re-hit the network, a
+# throttled failure must never be persisted as if it were an answer, and the breaker
+# must stop the run from hammering a service already refusing it.
+import sys  # noqa: E402
+import types  # noqa: E402
+
+import pytest  # noqa: E402
+
+from pipeline.collectors import rss  # noqa: E402
+
+GURL = "https://news.google.com/rss/articles/{}"
+
+
+@pytest.fixture
+def resolver(tmp_path, monkeypatch):
+    """Isolated resolver: temp disk cache, stubbed decoder, zeroed counters."""
+    monkeypatch.setattr(rss, "CACHE_PATH", tmp_path / "gnews.json")
+    monkeypatch.setattr(rss, "_disk", None)
+    rss.reset_run_state()
+    calls: list[str] = []
+    box = {"ok": True}
+
+    def stub(url, interval=1):
+        calls.append(url)
+        if not box["ok"]:
+            return {"status": False}
+        return {"status": True, "decoded_url": "https://publisher.example/" + url[-4:]}
+
+    monkeypatch.setitem(sys.modules, "googlenewsdecoder",
+                        types.SimpleNamespace(gnewsdecoder=stub))
+    yield rss, calls, box
+    rss.reset_run_state()
+
+
+def test_repeat_url_never_rehits_the_network(resolver):
+    r, calls, _ = resolver
+    u = GURL.format("aaaa")
+    assert r.resolve_url(u)[1] is True
+    r.save_cache()
+    r._resolve_cache.clear()                  # simulate the next day's fresh process
+    monkeypatched_disk = r._disk
+    r._disk = None                            # force a reload from the temp cache file
+    assert r.resolve_url(u) == (monkeypatched_disk[u], True)
+    assert len(calls) == 1, "cached resolution still cost a Google round-trip"
+    assert r.STATS["hit_disk"] == 1
+
+
+def test_failures_are_never_persisted(resolver):
+    r, _, box = resolver
+    box["ok"] = False
+    u = GURL.format("bbbb")
+    assert r.resolve_url(u) == (u, False)
+    r.save_cache()
+    assert u not in r._disk, "a throttled miss was cached and would poison the entry"
+
+
+def test_breaker_trips_and_then_stops_calling(resolver):
+    r, calls, box = resolver
+    box["ok"] = False
+    for i in range(r.FAILURE_STREAK_TRIP):
+        r.resolve_url(GURL.format(f"c{i:03d}"))
+    assert r.throttled()
+    before = len(calls)
+    r.resolve_url(GURL.format("dddd"))
+    assert len(calls) == before, "kept calling Google after the breaker tripped"
+    assert r.STATS["skipped_throttled"] == 1
+
+
+def test_success_resets_the_failure_streak(resolver):
+    r, _, box = resolver
+    box["ok"] = False
+    for i in range(r.FAILURE_STREAK_TRIP - 1):
+        r.resolve_url(GURL.format(f"e{i:03d}"))
+    box["ok"] = True
+    r.resolve_url(GURL.format("ffff"))
+    box["ok"] = False
+    for i in range(r.FAILURE_STREAK_TRIP - 1):
+        r.resolve_url(GURL.format(f"g{i:03d}"))
+    assert not r.throttled(), "streak should have restarted after the success"
+
+
+def test_reset_breaker_gives_a_fresh_chance(resolver):
+    r, _, box = resolver
+    box["ok"] = False
+    for i in range(r.FAILURE_STREAK_TRIP):
+        r.resolve_url(GURL.format(f"h{i:03d}"))
+    assert r.throttled()
+    r.reset_breaker()
+    assert not r.throttled()
+
+
+def test_corrupt_cache_file_does_not_kill_the_run(resolver, tmp_path):
+    r, _, _ = resolver
+    (tmp_path / "gnews.json").write_text("{not json")
+    r._disk = None
+    assert r.resolve_url(GURL.format("iiii"))[1] is True
