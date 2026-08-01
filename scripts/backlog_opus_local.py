@@ -449,6 +449,143 @@ def cmd_verify(args) -> None:
               f"(API adjudication rejects ~7.6% on comparable material)")
 
 
+AUDIT_SYSTEM = (
+    "You are auditing a public road-safety registry used with the Indian government. "
+    "Each item below is one map location, with the news-derived records the pipeline "
+    "clustered into it. You are shown ONLY those records — no scores, no flags, no "
+    "prior verdict. Judge from scratch.\n"
+    "For each item answer:\n"
+    "1. same_location: do these records describe ONE specific place a road crew could "
+    "be sent to? False if they are different places that merely fall near each other, "
+    "or if the location is only a district or a whole highway.\n"
+    "2. distinct_events: how many GENUINELY DIFFERENT events are here. Several outlets "
+    "covering one crash, or one ongoing complaint reported repeatedly, is ONE event. "
+    "Count events, not records.\n"
+    "3. location_specific: is the location precise enough to act on (a named junction, "
+    "a village stretch, a marked km point)? False for 'National Highway, <district>' or "
+    "a bare road name spanning many kilometres.\n"
+    "4. repeat_pattern_supported: do the records together evidence a place that "
+    "REPEATEDLY causes harm, as opposed to a single report?\n"
+    "Be strict. A government official acting on a false repeat-pattern claim is the "
+    "failure this audit exists to prevent."
+)
+
+
+def cmd_audit_hotspots(args) -> None:
+    """Blind audit of the map locations that claim a REPEAT PATTERN.
+
+    Scoped deliberately. Whether an individual record is sound was already answered by
+    --verify (181 of 182 held, with a negative control flagging 10/10 known-bad), so
+    re-checking all 645 would mostly re-confirm it. What a per-record check CANNOT
+    validate is a claim built from several records: that they are one place, that they
+    are distinct events, and that together they show a repeat pattern. That claim is
+    what an official acts on first, and the 1 Aug duplicate analysis found Mirganj-
+    Samaur sitting at exactly the escalation threshold of 3 partly on duplicates.
+
+    Reports; does not mutate. A hotspot is derived from its incidents, so it cannot be
+    'demoted' directly — the finding tells you which incidents to look at."""
+    from pipeline.db import connect
+    _preflight()
+    findings, stats = [], {"audited": 0, "not_one_place": 0, "vague_pin": 0,
+                           "inflated_count": 0, "false_repeat": 0, "sound": 0,
+                           "failed_batches": 0, "unparsed": 0}
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("""
+          select id, road_name, admin_district, admin_state, n_public_incidents,
+                 escalation_candidate, priority_score, dominant_defects
+          from public_hotspot
+          where escalation_candidate or n_public_incidents >= %s
+          order by escalation_candidate desc, n_public_incidents desc""",
+                    (args.min_incidents,))
+        spots = cur.fetchall()
+        print(f"auditing {len(spots)} location(s) that claim a repeat pattern "
+              f"· batch {args.batch}")
+        if args.dry_run:
+            print("dry run — nothing sent, nothing written")
+            return
+        detail = {}
+        for s in spots:
+            cur.execute("""
+              select i.id, i.location_text_best, i.crash_date, i.fatalities, i.injuries,
+                     i.narrative_summary, a.url
+              from public_incident i join source_article a on a.id = i.primary_source_id
+              where i.cluster_id = %s order by i.crash_date nulls last, i.id""", (s[0],))
+            incs = cur.fetchall()
+            rows = []
+            for inc in incs:
+                cur.execute("""select defect_type, evidence_snippet from incident_defect
+                               where incident_id=%s""", (inc[0],))
+                rows.append((inc, cur.fetchall()))
+            detail[s[0]] = rows
+
+        for i in range(0, len(spots), args.batch):
+            chunk = spots[i:i + args.batch]
+            print(f"\n[batch {i // args.batch + 1}] hotspots "
+                  f"{chunk[0][0]}–{chunk[-1][0]}")
+            parts = [AUDIT_SYSTEM,
+                     "\nReturn a BARE JSON ARRAY, one object per item, nothing else: "
+                     '{"hotspot_ref": <int>, "same_location": <bool>, '
+                     '"distinct_events": <int>, "location_specific": <bool>, '
+                     '"repeat_pattern_supported": <bool>, "confidence": <0-1>, '
+                     '"reason": "<=30 words"}']
+            for s in chunk:
+                parts.append(f"\n===== ITEM {s[0]} =====")
+                for (inc, defects) in detail[s[0]]:
+                    _, loc, dt, f, inj, summ, url = inc
+                    d = "; ".join(f"{c}: “{e[:120]}”" for c, e in defects) or "(none)"
+                    parts.append(
+                        f"  - date={dt or 'unknown'} deaths={f} injured={inj}\n"
+                        f"    location: {loc}\n    summary: {summ}\n    evidence: {d}")
+            verdicts = _extract_json_array(
+                (_claude("\n".join(parts)) or {}).get("result", ""))
+            if verdicts is None:
+                stats["failed_batches"] += 1
+                print("  no usable JSON — skipped")
+                continue
+            by_id = {s[0]: s for s in chunk}
+            seen = set()
+            for v in verdicts:
+                hid = v.get("hotspot_ref")
+                s = by_id.get(hid)
+                if not s:
+                    continue
+                seen.add(hid)
+                stats["audited"] += 1
+                stored_n, escalated = s[4], s[5]
+                blind_n = int(v.get("distinct_events") or 0)
+                problems = []
+                if not v.get("same_location"):
+                    problems.append("not one place"); stats["not_one_place"] += 1
+                if not v.get("location_specific"):
+                    problems.append("pin too vague"); stats["vague_pin"] += 1
+                if blind_n < stored_n:
+                    problems.append(f"counts {stored_n} but only {blind_n} distinct "
+                                    f"event(s)"); stats["inflated_count"] += 1
+                if escalated and not v.get("repeat_pattern_supported"):
+                    problems.append("ESCALATION FLAG UNSUPPORTED")
+                    stats["false_repeat"] += 1
+                if not problems:
+                    stats["sound"] += 1
+                findings.append({
+                    "hotspot_id": hid, "road": s[1], "district": s[2], "state": s[3],
+                    "stored_incidents": stored_n, "escalation_candidate": escalated,
+                    "priority_score": float(s[6] or 0), "blind_distinct_events": blind_n,
+                    "problems": problems, "reason": v.get("reason", ""),
+                    "confidence": v.get("confidence")})
+                if problems:
+                    print(f"  #{hid} {(s[1] or '?')[:32]:<32} {'; '.join(problems)[:70]}")
+            missing = set(by_id) - seen
+            if missing:
+                stats["unparsed"] += len(missing)
+                print(f"  {len(missing)} absent from the reply")
+
+    out = Path(args.out)
+    out.write_text(json.dumps({"findings": findings, "stats": stats}, indent=2,
+                              ensure_ascii=False))
+    print(f"\nDONE {stats}")
+    print(f"report: {out}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="0 = every eligible article")
@@ -456,12 +593,18 @@ def main() -> None:
     ap.add_argument("--all", action="store_true",
                     help="include the behaviour-crash tail (NOT recommended)")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--audit-hotspots", action="store_true",
+                    help="blind audit of locations claiming a repeat pattern")
+    ap.add_argument("--min-incidents", type=int, default=3)
+    ap.add_argument("--out", default="docs/HOTSPOT_AUDIT.json")
     ap.add_argument("--verify", action="store_true",
                     help="blind second opinion on self-approved records")
     ap.add_argument("--adjudicate", action="store_true",
                     help="second-pass review of the 'auto' queue "
                          "instead of extraction")
     args = ap.parse_args()
+    if args.audit_hotspots:
+        return cmd_audit_hotspots(args)
     if args.verify:
         return cmd_verify(args)
     if args.adjudicate:

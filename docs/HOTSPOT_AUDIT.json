@@ -1,0 +1,985 @@
+{
+  "findings": [
+    {
+      "hotspot_id": 377,
+      "road": "NH-20",
+      "district": "Gopalganj",
+      "state": "Bihar",
+      "stored_incidents": 3,
+      "escalation_candidate": true,
+      "priority_score": 82.7,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Three different districts (Sitamarhi NH-227, Gopalganj NH-531, Nawada NH-20) and three unrelated issues wrongly merged.",
+      "confidence": 0.95
+    },
+    {
+      "hotspot_id": 647,
+      "road": "Badalpur-Kahli link road",
+      "district": "Prayagraj",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 3,
+      "escalation_candidate": true,
+      "priority_score": 67.9,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Shreedattganj road, Bahria link road and Kaudihar CHC road are separate places; three independent complaints.",
+      "confidence": 0.93
+    },
+    {
+      "hotspot_id": 281,
+      "road": "Balliyan–Datagunj main road",
+      "district": "Bareilly",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 3,
+      "escalation_candidate": true,
+      "priority_score": 75.1,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Dugna culvert, Balliyan–Datagunj road and Nawada village road in two districts; three unrelated pothole complaints.",
+      "confidence": 0.93
+    },
+    {
+      "hotspot_id": 350,
+      "road": "NH-31",
+      "district": "Begusarai",
+      "state": "Bihar",
+      "stored_incidents": 3,
+      "escalation_candidate": true,
+      "priority_score": 80.8,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Three distinct points strung along NH-31 in Begusarai — encroachment drive, Barauni potholes, Behat flyover work zone.",
+      "confidence": 0.9
+    },
+    {
+      "hotspot_id": 58,
+      "road": "Bakarganj Chauraha road",
+      "district": "Kanpur",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 79.7,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Bakarganj cave-in is specific, but second record is a citywide CM Grid review spanning several Kanpur corridors.",
+      "confidence": 0.75
+    },
+    {
+      "hotspot_id": 135,
+      "road": "Baijnathpur-Sonwarsha main road",
+      "district": "Saharsa",
+      "state": "Bihar",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 71.4,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Citywide Saharsa rain waterlogging versus Laxminia Chowk repair; different sites, and second was already fixed.",
+      "confidence": 0.88
+    },
+    {
+      "hotspot_id": 471,
+      "road": "Bareilly-Pilibhit Highway",
+      "district": "Bareilly",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 78.1,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Rampur city waterlogging and a Bareilly College crossing cave-in are separate cities, separate causes.",
+      "confidence": 0.95
+    },
+    {
+      "hotspot_id": 81,
+      "road": "200 फीट बाइपास",
+      "district": "Jaipur",
+      "state": "Rajasthan",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 85.7,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Sanganer-area road collapses and the Jaipur-Ajmer 200-feet bypass crashes are different places; bypass repeat evidence stands alone.",
+      "confidence": 0.8
+    },
+    {
+      "hotspot_id": 314,
+      "road": "NH-19",
+      "district": "Chandauli",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 66.0,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Ghar Chit minor bridge and Pachfendwa open drain in Chandauli are unrelated sites, one report each.",
+      "confidence": 0.9
+    },
+    {
+      "hotspot_id": 333,
+      "road": "Amar Shaheed Inter College to Badhya road",
+      "district": "Azamgarh",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 68.4,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Muhammadpur block approach road and the 3-km Inter College–Badhya road are different stretches; two separate complaints.",
+      "confidence": 0.88
+    },
+    {
+      "hotspot_id": 12,
+      "road": "College Chowk road (NH-27 connecting road)",
+      "district": "Araria",
+      "state": "Bihar",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 81.3,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "College Chowk Forbesganj and a Palasi-block village road are separate sites; two unrelated drainage/construction complaints, no crashes.",
+      "confidence": 0.9
+    },
+    {
+      "hotspot_id": 895,
+      "road": "NH",
+      "district": "Muzaffarpur",
+      "state": "Bihar",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 77.5,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Kachchi-Pakki Chowk and Chauhatia Chowk on Toll Plaza-Madipur route are different Muzaffarpur locations; two separate fatal crashes.",
+      "confidence": 0.88
+    },
+    {
+      "hotspot_id": 375,
+      "road": "Barbiagha-Mokama main road",
+      "district": "Begusarai",
+      "state": "Bihar",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 78.4,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Chhaurahi Bazar and Bhagatpur village (Ballia block) are distinct sites; both are monsoon waterlogging reports, no crashes.",
+      "confidence": 0.9
+    },
+    {
+      "hotspot_id": 534,
+      "road": "Aanwla-Bhamorā Road",
+      "district": "Bareilly",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 73.3,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Balpur canal bridge on a rural road and Lal Phatak service road in Bareilly city are unrelated locations kilometres apart.",
+      "confidence": 0.92
+    },
+    {
+      "hotspot_id": 9,
+      "road": "NH-27",
+      "district": "Araria",
+      "state": "Bihar",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 69.0,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "NH-27 Uber Khabar stretch and Station Road (Jain Dharamshala-Chandni Chowk) are different Araria roads; two separate complaints.",
+      "confidence": 0.88
+    },
+    {
+      "hotspot_id": 729,
+      "road": "Bihaiya-Bihta State Highway",
+      "district": "Bhojpur",
+      "state": "Bihar",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 80.4,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Chenari in Rohtas and Ekona in Bhojpur are different districts and different highways; clustering is clearly erroneous.",
+      "confidence": 0.95
+    },
+    {
+      "hotspot_id": 248,
+      "road": "Agra-Delhi Highway",
+      "district": "Agra",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 70.7,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "ISBT Cut on Agra-Delhi Highway and a Fatehabad village connector road are separate sites; one fatal crash plus one culvert complaint.",
+      "confidence": 0.93
+    },
+    {
+      "hotspot_id": 690,
+      "road": "Amarpurmain road",
+      "district": "Bhagalpur",
+      "state": "Bihar",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 78.5,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Peerpainti bazaar-station road and Naugachhia fourlane at Kadwa Gola Tola are far apart; one collision, one separate complaint.",
+      "confidence": 0.92
+    },
+    {
+      "hotspot_id": 507,
+      "road": "Jamui-Lakhisarai main road",
+      "district": "Jamui",
+      "state": "Bihar",
+      "stored_incidents": 2,
+      "escalation_candidate": true,
+      "priority_score": 66.5,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Lord Minto Tower Chowk on NH-333 and Aligunj near State Bank are distinct Jamui locations; two separate waterlogging complaints.",
+      "confidence": 0.9
+    },
+    {
+      "hotspot_id": 149,
+      "road": null,
+      "district": "Amethi",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 57.3,
+      "blind_distinct_events": 1,
+      "problems": [
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Single record, one named village interlocking stretch; vegetation complaint with minor injuries only, no repeated documented crash events.",
+      "confidence": 0.75
+    },
+    {
+      "hotspot_id": 297,
+      "road": "Bheda Mod-Panjwara main road",
+      "district": "Banka",
+      "state": "Bihar",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 62.5,
+      "blind_distinct_events": 1,
+      "problems": [
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Single report of one flooding day at a named underpass; prior accidents asserted generically, not documented as separate events.",
+      "confidence": 0.8
+    },
+    {
+      "hotspot_id": 358,
+      "road": "Hasanpur-Sakhwa main road",
+      "district": "Samastipur",
+      "state": "Bihar",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 72.6,
+      "blind_distinct_events": 1,
+      "problems": [
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "One pedestrian fatality on a named village road stretch; no second incident recorded.",
+      "confidence": 0.9
+    },
+    {
+      "hotspot_id": 133,
+      "road": "Dhauni Chaura Nadi Pul",
+      "district": "Munger",
+      "state": "Bihar",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 69.0,
+      "blind_distinct_events": 1,
+      "problems": [
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "One Scorpio fall from a named bridge; stray snippet about a bike-truck crash is unlinked, not a confirmed second event.",
+      "confidence": 0.8
+    },
+    {
+      "hotspot_id": 394,
+      "road": "National Highway",
+      "district": "Bareilly",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 70.9,
+      "blind_distinct_events": 1,
+      "problems": [
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Named flyover service road, one injury report; 'daily accidents' is local claim without individual documented events.",
+      "confidence": 0.8
+    },
+    {
+      "hotspot_id": 420,
+      "road": "17 नंबर सड़क (Road 17)",
+      "district": "Nalanda",
+      "state": "Bihar",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 85.8,
+      "blind_distinct_events": 2,
+      "problems": [],
+      "reason": "One crossing point; two separately named fatal falls plus injuries indicate recurring harm, though from a single article.",
+      "confidence": 0.55
+    },
+    {
+      "hotspot_id": 424,
+      "road": "Baghouchghat-Pakhah main road",
+      "district": "Muzaffarpur",
+      "state": "Bihar",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 76.2,
+      "blind_distinct_events": 1,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Ten separate chowks across a city bundled as one; general encroachment complaint, no crash reported.",
+      "confidence": 0.9
+    },
+    {
+      "hotspot_id": 431,
+      "road": "Agra-Kanpur Highway",
+      "district": "Agra",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 60.9,
+      "blind_distinct_events": 1,
+      "problems": [
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "One complaint about potholes at a named village stretch; only near-misses, no crash history.",
+      "confidence": 0.85
+    },
+    {
+      "hotspot_id": 497,
+      "road": "NH-139",
+      "district": "Arwal",
+      "state": "Bihar",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 84.6,
+      "blind_distinct_events": 1,
+      "problems": [
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Named overbridge spot with one reported death; recurring-collision claim is narrative, not separate documented events.",
+      "confidence": 0.7
+    },
+    {
+      "hotspot_id": 506,
+      "road": "Gaya-Rajoli Road",
+      "district": "Gaya",
+      "state": "Bihar",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 49.8,
+      "blind_distinct_events": 1,
+      "problems": [
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Single no-injury overturn located only as 'near village', no road or km point a crew could target.",
+      "confidence": 0.6
+    },
+    {
+      "hotspot_id": 621,
+      "road": "Achalda-Ramgarh Road",
+      "district": "Auraiya",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 72.3,
+      "blind_distinct_events": 1,
+      "problems": [
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "One pothole complaint near a named petrol pump, already repaired by PWD; no repeat crash evidence.",
+      "confidence": 0.85
+    },
+    {
+      "hotspot_id": 670,
+      "road": "National Highway",
+      "district": "Hathras",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 70.4,
+      "blind_distinct_events": 1,
+      "problems": [
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Single overturn at a named landmark curve; locals' claim of frequent accidents is testimony, not multiple recorded events.",
+      "confidence": 0.85
+    },
+    {
+      "hotspot_id": 61,
+      "road": "Bareilly Bypass",
+      "district": "Bareilly",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 76.1,
+      "blind_distinct_events": 1,
+      "problems": [
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "One pothole injury near a named village on a named road; single report, no repeat evidence.",
+      "confidence": 0.88
+    },
+    {
+      "hotspot_id": 983,
+      "road": "Jahanabad main road",
+      "district": "Jahanabad",
+      "state": "Bihar",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 64.3,
+      "blind_distinct_events": 1,
+      "problems": [
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "One waterlogging complaint at a named bazaar landmark; recurring nuisance claim but only a single reported event, no harm recorded.",
+      "confidence": 0.85
+    },
+    {
+      "hotspot_id": 242,
+      "road": "NH-31",
+      "district": "Katihar",
+      "state": "Bihar",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 80.9,
+      "blind_distinct_events": 1,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "One city-wide drainage-work complaint spanning Sadar Hospital Road, Patel Chowk and Kalibari Chowk; not one dispatchable site.",
+      "confidence": 0.8
+    },
+    {
+      "hotspot_id": 17,
+      "road": "Barharia-Siwan Main Road",
+      "district": "Siwan",
+      "state": "Bihar",
+      "stored_incidents": 1,
+      "escalation_candidate": true,
+      "priority_score": 79.9,
+      "blind_distinct_events": 1,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "ESCALATION FLAG UNSUPPORTED"
+      ],
+      "reason": "Town-wide open-drain complaint across Siwan; no specific site, one report despite alleged repeated injuries.",
+      "confidence": 0.87
+    },
+    {
+      "hotspot_id": 446,
+      "road": "Bansdih-Beruarbari main road (link road to Asega village)",
+      "district": "Ballia",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 7,
+      "escalation_candidate": false,
+      "priority_score": 66.0,
+      "blind_distinct_events": 7,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Seven unrelated roads and culverts scattered across Ballia district clustered together; district-level aggregation, not one place.",
+      "confidence": 0.93
+    },
+    {
+      "hotspot_id": 458,
+      "road": "Jahangirabad-Daulatpur Marg",
+      "district": "Bulandshahr",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 6,
+      "escalation_candidate": false,
+      "priority_score": 52.7,
+      "blind_distinct_events": 5,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "counts 6 but only 5 distinct event(s)"
+      ],
+      "reason": "Six records across separate Bulandshahr villages and roads; two are duplicate dry-tree reports. Different places, not one site.",
+      "confidence": 0.9
+    },
+    {
+      "hotspot_id": 154,
+      "road": "Ring Bandha Road",
+      "district": "Ballia",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 5,
+      "escalation_candidate": false,
+      "priority_score": 17.5,
+      "blind_distinct_events": 4,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "counts 5 but only 4 distinct event(s)"
+      ],
+      "reason": "Ring road duplicated once, plus three unrelated Ballia locations; distinct roads merged into a district-level cluster.",
+      "confidence": 0.9
+    },
+    {
+      "hotspot_id": 159,
+      "road": "Gyanpur-Durgaganj Marg",
+      "district": "Bhadohi",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 5,
+      "escalation_candidate": false,
+      "priority_score": 19.0,
+      "blind_distinct_events": 5,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Five different Bhadohi roads, culverts and a highway stretch; only shared attribute is the district.",
+      "confidence": 0.92
+    },
+    {
+      "hotspot_id": 1216,
+      "road": "Jehanaganj-Daulatabad road",
+      "district": "Azamgarh",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 5,
+      "escalation_candidate": false,
+      "priority_score": 20.0,
+      "blind_distinct_events": 5,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Five separate Azamgarh village roads and bazaars in different tehsils; no common actionable location.",
+      "confidence": 0.92
+    },
+    {
+      "hotspot_id": 518,
+      "road": "Hisamuddinpur-Mansoorganj Marg",
+      "district": "Ambedkar Nagar",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 4,
+      "escalation_candidate": false,
+      "priority_score": 23.3,
+      "blind_distinct_events": 4,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Four different roads in Jahangirganj block clustered by area, not one site; each a separate one-off complaint.",
+      "confidence": 0.93
+    },
+    {
+      "hotspot_id": 622,
+      "road": "Khushhaldih-Banai connecting road",
+      "district": "Balrampur",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 4,
+      "escalation_candidate": false,
+      "priority_score": 54.7,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "counts 4 but only 3 distinct event(s)"
+      ],
+      "reason": "Two records duplicate the Mujhani bend pothole; Khushhaldih and Lathwar-Gaisadi roads are separate places in the block.",
+      "confidence": 0.85
+    },
+    {
+      "hotspot_id": 746,
+      "road": "Gyanpur-Durgaganj Marg",
+      "district": "Bhadohi",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 4,
+      "escalation_candidate": false,
+      "priority_score": 60.6,
+      "blind_distinct_events": 4,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Four distinct points strung along Gyanpur-Durgaganj corridor: canal bridges, Kalinjara Mod, Matethu Trimuhani, Khyokhar Mod. Different hazards, different sites.",
+      "confidence": 0.92
+    },
+    {
+      "hotspot_id": 150,
+      "road": "Highway service road (Moradabad-Delhi lane)",
+      "district": "Amroha",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 4,
+      "escalation_candidate": false,
+      "priority_score": 36.1,
+      "blind_distinct_events": 4,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Town-level Gajraula grouping: two separate service-road spots, station road, plus town-wide open drains. Not one dispatchable site.",
+      "confidence": 0.93
+    },
+    {
+      "hotspot_id": 1167,
+      "road": "Haliyapur-Fattepur sampark marg",
+      "district": "Amethi",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 4,
+      "escalation_candidate": false,
+      "priority_score": 46.2,
+      "blind_distinct_events": 4,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Four unrelated link roads across Jagdishpur and Bhetua blocks of Amethi; district-level aggregation of separate pothole complaints.",
+      "confidence": 0.94
+    },
+    {
+      "hotspot_id": 112,
+      "road": "Mugalsarai-Hridaypur Marg",
+      "district": "Chandauli",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 4,
+      "escalation_candidate": false,
+      "priority_score": 13.0,
+      "blind_distinct_events": 4,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Four separate Chandauli locations across different blocks, including a whole village's lanes; only shared trait is waterlogging.",
+      "confidence": 0.94
+    },
+    {
+      "hotspot_id": 273,
+      "road": "Ajitmal Marg (Awadhpur-Mansukhpur road)",
+      "district": "Auraiya",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 24.4,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Three different Auraiya roads in different tehsils: one bike fall, one vegetation complaint, one encroachment complaint.",
+      "confidence": 0.93
+    },
+    {
+      "hotspot_id": 128,
+      "road": "Kajitola Chowk-Shivanandpur-Mathurapur road",
+      "district": "Katihar",
+      "state": "Bihar",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 45.2,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "District-wide Katihar rain flooding, a municipal mohalla worksite, and a 4-5 km rural road; unrelated sites.",
+      "confidence": 0.93
+    },
+    {
+      "hotspot_id": 402,
+      "road": "Dom road",
+      "district": "Araria",
+      "state": "Bihar",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 63.3,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "counts 3 but only 2 distinct event(s)"
+      ],
+      "reason": "Two Dom road records are the same rain-cut report duplicated; Balua-Taran road is a separate site in another block.",
+      "confidence": 0.9
+    },
+    {
+      "hotspot_id": 155,
+      "road": null,
+      "district": "Balrampur",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 51.2,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Three separate Balrampur locations in different blocks: pipeline trenches, village road potholes, police-station waterlogging.",
+      "confidence": 0.93
+    },
+    {
+      "hotspot_id": 392,
+      "road": "Atarra Road",
+      "district": "Chitrakoot",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 62.8,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Hamirpur district roads plus two unrelated Chitrakoot sites; three separate monsoon complaints, no shared actionable point.",
+      "confidence": 0.95
+    },
+    {
+      "hotspot_id": 148,
+      "road": "Balipur-Kasturi Marg",
+      "district": "Amethi",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 52.1,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Three different Amethi roads in different blocks (Bhadar, Sangrampur, Bhetua) with different defect types; only district in common.",
+      "confidence": 0.94
+    },
+    {
+      "hotspot_id": 463,
+      "road": "Sikrara-Ajosi Marg",
+      "district": "Jaunpur",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 21.0,
+      "blind_distinct_events": 1,
+      "problems": [
+        "counts 3 but only 1 distinct event(s)"
+      ],
+      "reason": "Three outlets covering one Satalpur villagers' protest over Sikrara-Ajosi road; single event, chronic claim unverified by independent incidents.",
+      "confidence": 0.9
+    },
+    {
+      "hotspot_id": 329,
+      "road": "Rampur-Semgadha Marg",
+      "district": "Bahraich",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 44.4,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Ikauna bus stop lane, a Bahraich link road, and Rampur-Semgadha road are three distinct sites across two districts.",
+      "confidence": 0.93
+    },
+    {
+      "hotspot_id": 382,
+      "road": "Benipatti Bazar main road (NHAI stretch)",
+      "district": "Madhubani",
+      "state": "Bihar",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 41.0,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Benipatti bazar, Birit Mod turn, and Rakhbadi bridge approach are separate Madhubani locations with unrelated defects.",
+      "confidence": 0.95
+    },
+    {
+      "hotspot_id": 1319,
+      "road": "Bankeyganj-Cukra road",
+      "district": "Lakhimpur Kheri",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 64.8,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Trikauliya pothole, Bhavanipur canal pothole, and Bijua-Ramnagar blind curves are three separate Kheri sites.",
+      "confidence": 0.94
+    },
+    {
+      "hotspot_id": 166,
+      "road": "Bhojpur-Kanhaiya road",
+      "district": "Farrukhabad",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 16.5,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "Shukrullapur overbridge, Basa Nagla pond flooding, and Bhojpur-Kanhaiya new road are unrelated Farrukhabad locations.",
+      "confidence": 0.94
+    },
+    {
+      "hotspot_id": 505,
+      "road": "Bhagwanpur path (Bhagwanpur road)",
+      "district": "Begusarai",
+      "state": "Bihar",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 48.4,
+      "blind_distinct_events": 3,
+      "problems": [
+        "not one place",
+        "pin too vague"
+      ],
+      "reason": "NH31 service lane at Chakia, Pipra truck fall on Bhagwanpur road, and Bihat-Refinery road are distinct Begusarai sites.",
+      "confidence": 0.94
+    },
+    {
+      "hotspot_id": 147,
+      "road": "Ghosiana-Jahangirganj Marg",
+      "district": "Ambedkar Nagar",
+      "state": "Uttar Pradesh",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 25.5,
+      "blind_distinct_events": 2,
+      "problems": [
+        "not one place",
+        "pin too vague",
+        "counts 3 but only 2 distinct event(s)"
+      ],
+      "reason": "Two records duplicate one Ghosiana-Jahangirganj road complaint; Devaria market waterlogging is a separate place. Road name spans kilometres.",
+      "confidence": 0.88
+    },
+    {
+      "hotspot_id": 1262,
+      "road": "Mahua-Muzaffarpur main road",
+      "district": "Vaishali",
+      "state": "Bihar",
+      "stored_incidents": 3,
+      "escalation_candidate": false,
+      "priority_score": 54.0,
+      "blind_distinct_events": 1,
+      "problems": [
+        "counts 3 but only 1 distinct event(s)"
+      ],
+      "reason": "All three describe the same ongoing Kanchan Chowk Katahra pothole complaint; one persistent hazard reported thrice, not repeated distinct events.",
+      "confidence": 0.87
+    }
+  ],
+  "stats": {
+    "audited": 60,
+    "not_one_place": 45,
+    "vague_pin": 46,
+    "inflated_count": 7,
+    "false_repeat": 34,
+    "sound": 1,
+    "failed_batches": 0,
+    "unparsed": 0
+  }
+}
