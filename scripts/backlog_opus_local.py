@@ -51,6 +51,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline import configload                              # noqa: E402
+from pipeline.processing import auto_review as ar            # noqa: E402
 from pipeline.processing import extract as ex                # noqa: E402
 from pipeline.processing import prefilter                    # noqa: E402
 from pipeline.store import get_store                         # noqa: E402
@@ -209,6 +210,245 @@ def build_prompt(arts: list[dict]) -> str:
     return "\n".join(parts)
 
 
+ADJ_REVIEWER = "pipeline:auto_review_opus_local"
+
+
+def adjudicate_batch(rows: list[tuple]) -> list[dict] | None:
+    """Second-pass adjudication for a batch, using auto_review's own SYSTEM and tool
+    schema so the local path judges by identical rules to the API path."""
+    schema = json.dumps(ar.TOOL["input_schema"]["properties"], ensure_ascii=False)
+    parts = [
+        ar.SYSTEM,
+        "\nYou are reviewing SEVERAL records. Return a BARE JSON ARRAY, one object per "
+        "record, nothing else — no prose, no markdown fence.",
+        f"\nEach object: {{\"incident_id\": <int>, ...these fields}}:\n{schema}",
+    ]
+    for (iid, loc, f, i, infra, ec, gc, summary, text, defects) in rows:
+        parts.append(
+            f"\n===== RECORD {iid} =====\nFIRST-PASS EXTRACTION:\n"
+            f"location: {loc}\ncasualties: {f} dead / {i} injured\n"
+            f"infra_implicated: {infra} (extraction conf {ec}, geocode conf {gc})\n"
+            f"summary: {summary}\ndefects: {defects}\n\n"
+            f"FULL ARTICLE:\n{(text or '')[:7000]}")
+    env = _claude("\n".join(parts))
+    return _extract_json_array((env or {}).get("result", ""))
+
+
+def cmd_adjudicate(args) -> None:
+    """Clear the 'auto' queue locally instead of paying the API's metered daily share.
+
+    Fidelity matters here — this gates publication on a government-facing registry, so
+    it reuses auto_review.SYSTEM, auto_review.TOOL and auto_review.decide() verbatim
+    rather than restating the policy. The two conservatism rails that live OUTSIDE
+    decide() are replicated below: the defect-existence guard (restored after migration
+    009 dropped it and put 13 no-defect records on the map) and adjudicate-once, which
+    flips undecided items to needs_human so no later run re-judges them.
+
+    Actions are audit-logged as a DISTINCT reviewer (…_opus_local) so this path's
+    decisions stay identifiable and reversible on their own."""
+    from pipeline.db import connect
+    _preflight()
+    stats = {"reviewed": 0, "auto_published": 0, "rejected": 0, "machine_ok": 0,
+             "left_for_human": 0, "unparsed": 0, "failed_batches": 0}
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("""
+          select r.id, r.location_text_best, r.fatalities, r.injuries, r.infra_implicated,
+                 r.extraction_confidence, r.geocode_confidence, r.narrative_summary,
+                 a.clean_text
+          from incident r join source_article a on a.id = r.primary_source_id
+          where a.clean_text is not null and r.verification_status = 'auto'
+          order by r.id limit %s""", (args.limit,))
+        base = cur.fetchall()
+        rows = []
+        for r in base:
+            cur.execute("""select defect_type, evidence_snippet from incident_defect
+                           where incident_id=%s""", (r[0],))
+            d = "; ".join(f"{dt}: “{ev[:100]}”" for dt, ev in cur.fetchall()) or "(none)"
+            rows.append((*r, d))
+        print(f"adjudicating {len(rows)} incident(s) · batch {args.batch}")
+        if args.dry_run:
+            print("dry run — nothing sent, nothing written")
+            return
+
+        for i in range(0, len(rows), args.batch):
+            chunk = rows[i:i + args.batch]
+            print(f"\n[batch {i // args.batch + 1}] ids "
+                  f"{chunk[0][0]}–{chunk[-1][0]}")
+            verdicts = adjudicate_batch(chunk)
+            if verdicts is None:
+                stats["failed_batches"] += 1
+                print("  no usable JSON — left at 'auto' for a retry")
+                continue
+            by_id = {r[0]: r for r in chunk}
+            for v in verdicts:
+                iid = v.get("incident_id")
+                row = by_id.get(iid)
+                if not row:
+                    continue
+                gc = row[6]
+                stats["reviewed"] += 1
+                action = ar.decide(v, gc)
+                if action == "auto_published":
+                    # taxonomy-locked: no real defect tag => not publishable as a defect
+                    # dossier however good the verdict (migration 009 regression guard)
+                    cur.execute("""select 1 from incident_defect where incident_id=%s
+                                   and defect_type not in ('other_infrastructure',
+                                       'no_infrastructure_defect_identified') limit 1""",
+                                (iid,))
+                    if cur.fetchone() is None:
+                        action = None
+                note_conf = v.get("confidence")
+                # NOT-YET-GEOCODED GUARD. decide() reads `geocode_conf or 0`, so a NULL
+                # (not yet geocoded) is indistinguishable from a bad pin and blocks
+                # confirm_publish. Combined with adjudicate-once that PERMANENTLY demotes
+                # a publishable record for a reason that has nothing to do with it — it
+                # cost #2609 (0.80) and #2612 (0.88) before this guard existed. cmd_daily
+                # never hits this because geocode runs before auto_review; a standalone
+                # run can. Leave such items at 'auto' to be re-judged after geocoding.
+                if action is None and gc is None and v.get("verdict") == "confirm_publish":
+                    print(f"  #{iid} not geocoded yet — left at 'auto' "
+                          f"(verdict {v.get('verdict')} {note_conf})")
+                    stats["deferred_ungeocoded"] = stats.get("deferred_ungeocoded", 0) + 1
+                    continue
+                if action is None:
+                    cur.execute("update incident set verification_status='needs_human', "
+                                "updated_at=now() where id=%s", (iid,))
+                    cur.execute("""insert into review_action (entity_type, entity_id,
+                                   reviewer, action, after_json, note) values
+                                   ('incident',%s,%s,'edit',%s::jsonb,%s)""",
+                                (iid, ADJ_REVIEWER, json.dumps(v),
+                                 f"auto-review(opus-local) -> needs_human "
+                                 f"(conf {note_conf}): {v.get('reason','')[:150]}"))
+                    conn.commit()
+                    stats["left_for_human"] += 1
+                    continue
+                cur.execute("update incident set verification_status=%s, updated_at=now() "
+                            "where id=%s", (action, iid))
+                cur.execute("""insert into review_action (entity_type, entity_id, reviewer,
+                               action, after_json, note) values ('incident',%s,%s,%s,
+                               %s::jsonb,%s)""",
+                            (iid, ADJ_REVIEWER,
+                             "approve" if action == "auto_published" else
+                             ("reject" if action == "rejected" else "edit"),
+                             json.dumps(v),
+                             f"auto-review(opus-local) -> {action} (conf {note_conf}): "
+                             f"{v.get('reason','')[:150]}"))
+                conn.commit()
+                stats[action] += 1
+                print(f"  #{iid} -> {action} ({note_conf}) {v.get('reason','')[:60]}")
+            missing = set(by_id) - {v.get("incident_id") for v in verdicts}
+            if missing:
+                stats["unparsed"] += len(missing)
+                print(f"  {len(missing)} absent from the reply, still 'auto'")
+    print(f"\nDONE {stats}")
+
+
+VERIFY_REVIEWER = "pipeline:blind_verify_opus_local"
+
+VERIFY_SYSTEM = (
+    "You are auditing a public road-safety registry used with the Indian government. "
+    "You are shown ONLY a news article. Judge it from scratch — you are NOT being asked "
+    "to agree with anything.\n"
+    "Answer three things:\n"
+    "1. in_scope: does this article report a specific road crash in India, or a specific "
+    "road-infrastructure defect/hazard in India? Building/premises collapses, wells, "
+    "lifts and electrocutions are NOT in scope unless the road itself is the hazard.\n"
+    "2. infra_implicated: do the article's OWN WORDS attribute the crash or hazard, at "
+    "least partly, to road infrastructure? Infrastructure merely present in the scene "
+    "does not count — a car striking a divider does not implicate the divider.\n"
+    "3. defect_types: which defect codes the article actually supports, from the list "
+    "given. Empty if none.\n"
+    "Be strict. This audit exists to find records that should never have been published."
+)
+
+
+def cmd_verify(args) -> None:
+    """Blind second opinion on records this machine already published.
+
+    Tonight's adjudication rejected 0 of 374 against the API path's 7.6% baseline,
+    because Opus extracted these records AND then adjudicated them while being shown
+    its own first-pass answer. That is not the independent check auto_review's design
+    assumes. This pass removes the anchor: the model sees the article and nothing else,
+    and its verdict is compared to the stored record in code rather than by self-report.
+
+    Caveat worth keeping: the same model blind is still more correlated than a different
+    model would be. This removes the anchoring effect, not the shared-prior effect."""
+    from pipeline.db import connect
+    _preflight()
+    codes = ex.taxonomy_codes()
+    stats = {"checked": 0, "agree": 0, "demoted_infra": 0, "demoted_scope": 0,
+             "flagged_defects": 0, "failed_batches": 0, "unparsed": 0}
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("""
+          select distinct i.id, i.infra_implicated, a.clean_text
+          from incident i
+          join source_article a on a.id = i.primary_source_id
+          join review_action ra on ra.entity_id = i.id and ra.entity_type='incident'
+          where ra.reviewer = %s and ra.action = 'approve'
+            and i.verification_status = 'auto_published' and a.clean_text is not null
+          order by i.id limit %s""", (ADJ_REVIEWER, args.limit))
+        rows = cur.fetchall()
+        print(f"blind-verifying {len(rows)} self-approved record(s) · batch {args.batch}")
+        if args.dry_run:
+            print("dry run — nothing sent, nothing written")
+            return
+        for i in range(0, len(rows), args.batch):
+            chunk = rows[i:i + args.batch]
+            print(f"\n[batch {i // args.batch + 1}] ids {chunk[0][0]}–{chunk[-1][0]}")
+            parts = [VERIFY_SYSTEM,
+                     f"\nValid defect codes: {', '.join(codes)}",
+                     "\nReturn a BARE JSON ARRAY, one object per article, nothing else: "
+                     "{\"article_ref\": <int>, \"in_scope\": <bool>, "
+                     "\"infra_implicated\": <bool>, \"defect_types\": [<code>...], "
+                     "\"confidence\": <0-1>, \"reason\": \"<=25 words\"}"]
+            for (iid, _, text) in chunk:
+                parts.append(f"\n===== ARTICLE {iid} =====\n{(text or '')[:7000]}")
+            verdicts = _extract_json_array((_claude("\n".join(parts)) or {}).get("result", ""))
+            if verdicts is None:
+                stats["failed_batches"] += 1
+                print("  no usable JSON — left as-is")
+                continue
+            stored = {r[0]: r[1] for r in chunk}
+            seen = set()
+            for v in verdicts:
+                iid = v.get("article_ref")
+                if iid not in stored:
+                    continue
+                seen.add(iid)
+                stats["checked"] += 1
+                blind_scope = bool(v.get("in_scope"))
+                blind_infra = bool(v.get("infra_implicated"))
+                reason = (v.get("reason") or "")[:150]
+                demote = None
+                if not blind_scope:
+                    demote, key = "blind pass judged it OUT OF SCOPE", "demoted_scope"
+                elif stored[iid] and not blind_infra:
+                    demote, key = ("blind pass found NO infrastructure attribution, "
+                                   "record published as infra-implicated"), "demoted_infra"
+                if demote:
+                    cur.execute("update incident set verification_status='needs_human', "
+                                "updated_at=now() where id=%s", (iid,))
+                    cur.execute("""insert into review_action (entity_type, entity_id,
+                                   reviewer, action, after_json, note) values
+                                   ('incident',%s,%s,'edit',%s::jsonb,%s)""",
+                                (iid, VERIFY_REVIEWER, json.dumps(v),
+                                 f"blind verify DISAGREES: {demote}. {reason}"))
+                    conn.commit()
+                    stats[key] += 1
+                    print(f"  #{iid} DEMOTED — {demote[:60]}")
+                    continue
+                stats["agree"] += 1
+            missing = set(stored) - seen
+            if missing:
+                stats["unparsed"] += len(missing)
+                print(f"  {len(missing)} absent from the reply, left as-is")
+    print(f"\nDONE {stats}")
+    if stats["checked"]:
+        d = stats["demoted_infra"] + stats["demoted_scope"]
+        print(f"disagreement rate: {d}/{stats['checked']} = {d/stats['checked']*100:.1f}% "
+              f"(API adjudication rejects ~7.6% on comparable material)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="0 = every eligible article")
@@ -216,7 +456,16 @@ def main() -> None:
     ap.add_argument("--all", action="store_true",
                     help="include the behaviour-crash tail (NOT recommended)")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--verify", action="store_true",
+                    help="blind second opinion on self-approved records")
+    ap.add_argument("--adjudicate", action="store_true",
+                    help="second-pass review of the 'auto' queue "
+                         "instead of extraction")
     args = ap.parse_args()
+    if args.verify:
+        return cmd_verify(args)
+    if args.adjudicate:
+        return cmd_adjudicate(args)
 
     defect_terms = [t for lang in configload.keywords().values()
                     for t in lang.get("infra_defect", [])]
