@@ -46,6 +46,20 @@ _STATE_ALIASES = {
     "puducherry": {"puducherry", "pondicherry"},
 }
 
+# Districts India has renamed. Without these a district guard REJECTS correct pins:
+# measured 1 Aug 2026, 1 of 3 sampled mismatches was Chhatrapati Sambhajinagar vs
+# Aurangabad — the same place under both names. Geocoders lag official renames by
+# years, and the article text may use either.
+_DISTRICT_ALIASES = {
+    "chhatrapati sambhajinagar": {"chhatrapati sambhajinagar", "aurangabad"},
+    "dharashiv": {"dharashiv", "osmanabad"},
+    "prayagraj": {"prayagraj", "allahabad"},
+    "ayodhya": {"ayodhya", "faizabad"},
+    "gurugram": {"gurugram", "gurgaon"},
+    "bengaluru urban": {"bengaluru urban", "bangalore urban", "bengaluru", "bangalore"},
+    "mysuru": {"mysuru", "mysore"},
+}
+
 
 def _load_cache() -> dict:
     global _cache
@@ -110,6 +124,10 @@ def _mapbox(query: str) -> dict | None:
             result = {"lat": float(lat), "lon": float(lon),
                       "state": ((props.get("context", {}).get("region") or {})
                                 .get("name") or ""),
+                      "district": ((props.get("context", {}).get("district") or {})
+                                   .get("name")
+                                   or (props.get("context", {}).get("place") or {})
+                                   .get("name") or ""),
                       "display": (props.get("full_address") or "")[:160],
                       "span_km": _bbox_span_km(bbox[1], bbox[0], bbox[3], bbox[2])
                                  if bbox else 0.0}
@@ -136,6 +154,9 @@ def _resolve(query: str) -> dict | None:
         bb = hit.get("boundingbox")
         return {"lat": float(hit["lat"]), "lon": float(hit["lon"]),
                 "state": (hit.get("address", {}).get("state") or ""),
+                "district": (hit.get("address", {}).get("state_district")
+                             or hit.get("address", {}).get("county")
+                             or hit.get("address", {}).get("city_district") or ""),
                 "display": (hit.get("display_name") or "")[:160],
                 "span_km": _bbox_span_km(float(bb[0]), float(bb[2]),
                                          float(bb[1]), float(bb[3])) if bb else 0.0}
@@ -160,6 +181,37 @@ def _state_ok(got_state: str, expected_state: str | None) -> bool:
         if got in aliases:
             got = canon
     return got == exp
+
+
+def _district_ok(got_district: str, expected_district: str | None) -> bool:
+    """The other half of the 18 Jul anchoring fix.
+
+    _state_ok stopped a Hathras crash being pinned in Odisha. It cannot stop a
+    Gopalganj crash being pinned in Nawada — both are Bihar. Measured 1 Aug 2026:
+    querying 'NH-531, Gopalganj, Bihar' returns a road in NAWADA, the state matches,
+    0.80 confidence sails past the 0.6 gate, and DBSCAN then correctly clusters three
+    such pins from three districts into one phantom hotspot. 34 of 35 escalation
+    candidates — the flag that surfaces a location for government action — were built
+    that way.
+
+    Unknown on either side returns True: this guard exists to catch a CONFIDENT
+    mismatch, and a missing value is handled by the confidence cap in geocode(), not
+    by rejecting the article."""
+    if not expected_district:
+        return True
+    got = (got_district or "").strip().lower()
+    if not got:
+        return True
+    exp = expected_district.strip().lower()
+    for s_ in (" district", " dist.", " dist"):
+        got = got.removesuffix(s_)
+        exp = exp.removesuffix(s_)
+    if got == exp:
+        return True
+    for canon, aliases in _DISTRICT_ALIASES.items():
+        if exp in aliases and got in aliases:
+            return True
+    return False
 
 
 _coord_re = re.compile(r"(\d{1,2}\.\d{3,})[,\s]+(\d{2,3}\.\d{3,})")
@@ -224,6 +276,8 @@ def geocode(location_text: str, road_name: str | None = None,
             continue
         if not _state_ok(hit["state"], admin_state):
             continue           # homonym in another state — keep descending the ladder
+        if not _district_ok(hit.get("district", ""), admin_district):
+            continue           # right state, WRONG district — keep descending
         # NOTE: geocode_method is CHECK-constrained to a controlled vocabulary — the
         # guard signal goes in geocode_qualifier, never as a method suffix (that bug
         # would have failed every geocode UPDATE; migration 012).
@@ -234,6 +288,10 @@ def geocode(location_text: str, road_name: str | None = None,
             # the state guard "passed" only because the hit carried no state metadata —
             # unverified is not verified; cap below the publish bar
             conf, qualifier = min(conf, STATELESS_HIT_MAX_CONF), "stateless_hit"
+        elif admin_district and not (hit.get("district") or "").strip():
+            # we knew the district but the provider returned none, so _district_ok
+            # could not run. Same principle as stateless_hit: unverified != verified.
+            conf, qualifier = min(conf, STATELESS_HIT_MAX_CONF), "districtless_hit"
         if hit.get("span_km", 0.0) > WIDE_AREA_KM:
             # pin is an arbitrary point on a huge feature (e.g. a 47km ring road)
             conf, qualifier = min(conf, WIDE_AREA_MAX_CONF), qualifier or "wide_area"
