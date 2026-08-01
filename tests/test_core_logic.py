@@ -702,3 +702,46 @@ def test_tiny_or_missing_samples_never_fire():
     assert resolver_alarm({"ok": 1, "failed": 40, "skipped_throttled": 0}) is None
     assert resolver_alarm(None) is None
     assert resolver_alarm({}) is None
+
+
+# --------------------------------------- geocode_qualifier vocabulary vs its constraint
+def _constraint_vocabulary() -> set[str]:
+    """The terms the newest migration allows in incident.geocode_qualifier."""
+    import re
+    migs = sorted((_pl.Path(__file__).resolve().parent.parent / "migrations")
+                  .glob("[0-9]*.sql"))
+    latest = [m for m in migs if "geocode_qualifier_check" in m.read_text()][-1]
+    body = latest.read_text()
+    clause = body[body.rindex("incident_geocode_qualifier_check"):]
+    return set(re.findall(r"'([a-z_]+)'", clause[:clause.index(")")]))
+
+
+def test_every_qualifier_the_geocoder_writes_is_allowed_by_the_constraint():
+    """The 1 Aug regression. 5db87ee added 'districtless_hit' in code with no migration;
+    the column's CHECK still listed three terms, so the first provider response missing a
+    district would have aborted the geocode batch — and cmd_geocode commits after the
+    loop with no try/except, so the whole batch, every run, until someone noticed."""
+    from pipeline.processing.geocode import QUALIFIERS
+    missing = QUALIFIERS - _constraint_vocabulary()
+    assert not missing, f"geocode writes {missing} but no migration allows it"
+
+
+def test_declared_qualifiers_match_the_branches_that_set_them():
+    """QUALIFIERS is only useful if it is the real list. Read the literals actually
+    assigned to `qualifier` in the module and hold the declaration against them."""
+    import re
+    from pipeline.processing import geocode as g
+    assigned: set[str] = set()
+    for line in _pl.Path(g.__file__).read_text().splitlines():
+        # any line that assigns to `qualifier`, whatever shape the expression takes
+        # ('x', or `qualifier or 'y'`, or a future one) — matching the expression itself
+        # would just make this test brittle in the same way the code is.
+        if re.search(r"\bqualifier\s*=", line) and "QUALIFIERS" not in line:
+            assigned |= set(re.findall(r'"([a-z_]+)"', line))
+    assert assigned == set(g.QUALIFIERS), (
+        f"declared {set(g.QUALIFIERS)} but the code assigns {assigned}")
+
+
+def test_repair_scripts_qualifier_is_allowed_too():
+    """The repair writes its own term when no district-valid location exists at all."""
+    assert "no_district_valid_location" in _constraint_vocabulary()

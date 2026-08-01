@@ -32,6 +32,14 @@ UNANCHORED_MAX_CONF = 0.5     # no state AND no district known -> state guard ca
 STATELESS_HIT_MAX_CONF = 0.55  # hit carries no state metadata -> guard ran on nothing
 WIDE_AREA_KM = 6.0             # hit spans a huge feature (long road / big polygon):
 WIDE_AREA_MAX_CONF = 0.55      # a pin somewhere on 47km of Outer Ring Road is not 0.7
+
+# Every geocode_qualifier this module can write. The column has a CHECK constraint, so
+# this set and the constraint must stay in step — a term added here without a migration
+# aborts the whole geocode batch on the next run, and does so every run after. Declared
+# rather than left implicit in the branches because that has now shipped twice: once on
+# geocode_method (18 Jul, caught by the audit), once on this column (1 Aug, caught only
+# because a repair happened to write the column by hand the same day).
+QUALIFIERS = frozenset({"unanchored", "stateless_hit", "districtless_hit", "wide_area"})
 UA = "CrashfreeIndia-DefectRepo/0.1 (road-safety research; contact: deepanshu@crashfreeindia.org)"
 CACHE_PATH = ROOT / "data" / "geocode_cache.json"
 INDIA_BBOX = (6.0, 68.0, 37.6, 97.5)   # lat_min, lon_min, lat_max, lon_max
@@ -280,7 +288,11 @@ def geocode(location_text: str, road_name: str | None = None,
             continue           # right state, WRONG district — keep descending
         # NOTE: geocode_method is CHECK-constrained to a controlled vocabulary — the
         # guard signal goes in geocode_qualifier, never as a method suffix (that bug
-        # would have failed every geocode UPDATE; migration 012).
+        # would have failed every geocode UPDATE; migration 012). geocode_qualifier is
+        # CHECK-constrained too: every value below must appear in QUALIFIERS, which a
+        # test holds against the migration. Adding a term here without the matching
+        # migration is what shipped on 1 Aug and would have aborted the geocode batch of
+        # every run from 2 Aug on.
         qualifier = None
         if not anchored:
             conf, qualifier = min(conf, UNANCHORED_MAX_CONF), "unanchored"
