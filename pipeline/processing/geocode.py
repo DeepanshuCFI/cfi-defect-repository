@@ -106,12 +106,41 @@ def _nominatim(query: str) -> dict | None:
 
 _last_mb_call = 0.0
 
+# Every field _mapbox writes. Unlike _nominatim — which caches the RAW provider response
+# and lets _resolve derive fields on each read — this function caches the NORMALIZED
+# dict, so a cached entry is frozen in the shape the code had when it was written.
+_MB_FIELDS = ("lat", "lon", "state", "district", "display", "span_km")
+
+
+def _mb_cache_usable(entry) -> bool:
+    """Whether a cached Mapbox entry still has everything the guards read.
+
+    'district' only started being written by 5db87ee (1 Aug), which landed after that
+    day's scheduled run — so every entry in the CI geocode cache predates it and comes
+    back with no district key. _district_ok would then see "" and cap the pin at 0.55,
+    below the publish gate: the district guard would look over-strict when the real fault
+    is a stale cache. Re-resolving a short-shaped entry overwrites it, so this heals
+    itself in one run.
+
+    Checked as whole-shape rather than 'district' alone because this is the THIRD time
+    the module has been bitten by a cache outliving the code that filled it (the 'mb|'
+    namespace exists for the same reason, and repair_district_pins.py works around it
+    with a throwaway cache). A future field added to the normalizer invalidates older
+    entries automatically.
+
+    Two things deliberately stay usable: a cached None, which is a real 'Mapbox found
+    nothing', and "district": "", which is a real 'provider returned no district' — the
+    case districtless_hit exists to handle. Re-fetching either would be a lie about what
+    the provider said.
+    """
+    return entry is None or all(k in entry for k in _MB_FIELDS)
+
 
 def _mapbox(query: str) -> dict | None:
     """Normalized {lat, lon, state, display} via Mapbox forward geocoding, or None."""
     cache = _load_cache()
     key = "mb|" + re.sub(r"\s+", " ", query.strip().lower())
-    if key in cache:
+    if key in cache and _mb_cache_usable(cache[key]):
         return cache[key]
     global _last_mb_call
     wait = _last_mb_call + 0.12 - time.time()   # stay far under the 600/min limit

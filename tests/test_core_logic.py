@@ -745,3 +745,84 @@ def test_declared_qualifiers_match_the_branches_that_set_them():
 def test_repair_scripts_qualifier_is_allowed_too():
     """The repair writes its own term when no district-valid location exists at all."""
     assert "no_district_valid_location" in _constraint_vocabulary()
+
+
+# ------------------------------------------- mapbox cache outliving the code that filled it
+# _mapbox caches the NORMALIZED dict, so entries freeze in the shape the code had when
+# written. 'district' arrived with 5db87ee AFTER that day's run, so every entry in the CI
+# cache lacks it — and a missing district reads as districtless_hit, capping good pins at
+# 0.55 and making the new guard look over-strict when the cache is what is stale.
+PRE_FIX_ENTRY = {"lat": 26.46, "lon": 84.44, "state": "Bihar",
+                 "display": "Gopalganj, Bihar", "span_km": 1.0}          # no 'district'
+POST_FIX_ENTRY = dict(PRE_FIX_ENTRY, district="Gopalganj")
+PROVIDER_SAID_NO_DISTRICT = dict(PRE_FIX_ENTRY, district="")
+
+
+def test_pre_fix_cache_entry_is_treated_as_a_miss():
+    from pipeline.processing import geocode as g
+    assert not g._mb_cache_usable(PRE_FIX_ENTRY)
+
+
+def test_post_fix_entry_is_served_from_cache():
+    from pipeline.processing import geocode as g
+    assert g._mb_cache_usable(POST_FIX_ENTRY)
+
+
+def test_empty_district_is_a_real_answer_not_a_stale_one():
+    """"district": "" means the provider genuinely returned none — the case
+    districtless_hit exists for. Re-fetching it would misreport what Mapbox said."""
+    from pipeline.processing import geocode as g
+    assert g._mb_cache_usable(PROVIDER_SAID_NO_DISTRICT)
+
+
+def test_cached_miss_stays_a_miss():
+    """A cached None is a real 'Mapbox found nothing'. Invalidating it would re-buy the
+    same negative every run."""
+    from pipeline.processing import geocode as g
+    assert g._mb_cache_usable(None)
+
+
+def test_stale_entry_is_refetched_and_overwritten(monkeypatch):
+    """End to end: a pre-fix entry must not be returned, and the fresh result replaces it
+    so the cache heals in one run."""
+    from pipeline.processing import geocode as g
+    key = "mb|gopalganj, bihar"
+    monkeypatch.setattr(g, "_cache", {key: dict(PRE_FIX_ENTRY)})
+    monkeypatch.setattr(g, "_save_cache", lambda: None)
+    monkeypatch.setattr(g, "MAPBOX_TOKEN", "test-token")
+
+    class R:
+        status_code = 200
+        def json(self):
+            return {"features": [{"geometry": {"coordinates": [84.44, 26.46]},
+                                  "properties": {"context": {
+                                      "region": {"name": "Bihar"},
+                                      "district": {"name": "Gopalganj"}},
+                                  "full_address": "Gopalganj, Bihar"}}]}
+
+    monkeypatch.setattr(g.httpx, "get", lambda *a, **k: R())
+    out = g._mapbox("Gopalganj, Bihar")
+    assert out["district"] == "Gopalganj", "returned the stale entry instead of refetching"
+    assert g._cache[key]["district"] == "Gopalganj", "stale entry was not overwritten"
+
+
+def test_declared_fields_match_what_mapbox_actually_writes(monkeypatch):
+    """If the normalizer gains a field and _MB_FIELDS does not, the staleness check stops
+    covering it and this whole class of bug returns silently."""
+    from pipeline.processing import geocode as g
+    monkeypatch.setattr(g, "_cache", {})
+    monkeypatch.setattr(g, "_save_cache", lambda: None)
+    monkeypatch.setattr(g, "MAPBOX_TOKEN", "test-token")
+
+    class R:
+        status_code = 200
+        def json(self):
+            return {"features": [{"geometry": {"coordinates": [84.4, 26.4]},
+                                  "bbox": [84.3, 26.3, 84.5, 26.5],
+                                  "properties": {"context": {"region": {"name": "Bihar"}},
+                                                 "full_address": "x"}}]}
+
+    monkeypatch.setattr(g.httpx, "get", lambda *a, **k: R())
+    written = g._mapbox("anywhere")
+    assert set(written) == set(g._MB_FIELDS), (
+        f"_mapbox writes {set(written)} but _MB_FIELDS declares {set(g._MB_FIELDS)}")
