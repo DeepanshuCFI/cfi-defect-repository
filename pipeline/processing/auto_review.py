@@ -21,12 +21,6 @@ Shadow mode prints verdicts without writing; apply mode writes review_action row
 as reviewer 'pipeline:auto_review' so every machine decision is auditable and
 reversible, exactly like a human's.
 """
-import anthropic
-
-from pipeline import configload
-from pipeline.settings import ANTHROPIC_API_KEY
-
-_client: anthropic.Anthropic | None = None
 
 TOOL = {
     "name": "record_review",
@@ -84,13 +78,6 @@ SYSTEM = (
     "crash-frequency statistics — not an error — just not publishable as a defect.\n"
     "6. When torn, choose needs_human. A wrong publication damages years of trust."
 )
-
-
-def _get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    return _client
 
 
 def decide(verdict: dict, geocode_conf: float | None) -> str | None:
@@ -189,17 +176,9 @@ def run(limit: int = 200) -> dict:
 
 
 def adjudicate(article_text: str, extraction_summary: str) -> dict:
-    model = configload.settings()["models"]["extraction"]   # strong model — this gates publication
+    from pipeline import llm
     content = (f"FIRST-PASS EXTRACTION:\n{extraction_summary}\n\n"
                f"FULL ARTICLE:\n{article_text[:7000]}")
-    msg = _get_client().messages.create(
-        model=model, max_tokens=400, system=SYSTEM,
-        tools=[TOOL], tool_choice={"type": "tool", "name": "record_review"},
-        messages=[{"role": "user", "content": content}])
-    from pipeline import llmcost
-    llmcost.add(model, msg.usage)
-    for block in msg.content:
-        if block.type == "tool_use":
-            return dict(block.input)
-    return {"verdict": "needs_human", "confidence": 0, "reason": "no tool output",
-            "infra_causal": False, "infra_mentioned": False, "extraction_faithful": False}
+    # strong model — this gates publication
+    return llm.structured(SYSTEM, TOOL, content,
+                          model=llm.model_for("extraction"), max_tokens=400)

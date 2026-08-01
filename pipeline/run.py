@@ -194,8 +194,13 @@ def cmd_retry_unresolved(args) -> dict:
 
 
 def _api_limit_hit(e: Exception) -> bool:
-    """The Anthropic monthly spend-limit refusal — treat as 'stop for today', never as
-    per-article failure (2026-07-13: 424 good articles were WARN'd through it)."""
+    """A usage refusal — treat as 'stop for today', never as a per-article failure
+    (2026-07-13: 424 good articles were WARN'd through it). Covers the API's monthly
+    spend limit and, on LLM_BACKEND=cli, the subscription's rate limit: same meaning,
+    same handling, and unfinished articles keep their status so the next run resumes."""
+    from pipeline.llm import RateLimited
+    if isinstance(e, RateLimited):
+        return True
     return "reached your specified api usage limits" in str(e).lower()
 
 
