@@ -61,53 +61,81 @@ def tier(score: float, tiers: dict) -> str:
 
 
 def run(today: date | None = None) -> dict:
+    """Score every hotspot.
+
+    SET-BASED, not per-hotspot. The original looped over hotspots issuing three
+    statements each. That was fine at 45 hotspots and is not at 1,917: DATABASE_URL
+    points at the Tokyo session pooler (GitHub runners are IPv4-only), measured 168ms
+    round-trip from India, so ~5,750 sequential statements cost ~16 minutes of pure
+    network wait with the database sitting idle in transaction. It grows linearly with
+    hotspot count, inside the same 360-minute ceiling as collect and extract — and a
+    timeout cancels the job, skipping export and deploy.
+
+    Now: three aggregate reads, scoring in Python (the pure, unit-tested functions are
+    untouched), one batched write. Four round trips regardless of hotspot count.
+
+    Two semantics that are easy to lose here and are deliberately preserved:
+      - LEFT JOIN from hotspot, so the 24 hotspots with no incidents are still scored.
+        A plain GROUP BY over incident would silently skip them.
+      - n_sources stays a SEPARATE query. Joining incident_source into the aggregate
+        multiplies incident rows per source — that bug shipped once, and a 4-source
+        incident scored as 4 crashes.
+    """
     cfg = configload.settings()
     weights = cfg["priority_weights"]
     esc = cfg["escalation_rule"]
     today = today or date.today()
-    scored = 0
     with connect() as conn, conn.cursor() as cur:
-        cur.execute("select id from hotspot")
-        hids = [r[0] for r in cur.fetchall()]
-        for hid in hids:
-            # NOTE: incident aggregates and source counts computed separately —
-            # joining incident_source here multiplies incident rows per source
-            # (found live: a 4-source incident scored as 4 crashes).
-            cur.execute("""
-              select coalesce(sum(i.fatalities),0), coalesce(sum(i.injuries),0),
-                     count(*) filter (where i.crash_date >= %s - interval '6 months'),
-                     %s - max(i.crash_date),
-                     avg(case when i.victim_types && %s::text[] then 1.0 else 0.0 end),
-                     (select count(distinct s.source_article_id)
-                      from incident_source s
-                      join incident i2 on i2.id = s.incident_id
-                      where i2.cluster_id = %s),
-                     avg(i.geocode_confidence)
-              from incident i
-              where i.cluster_id = %s""",
-              (today, today, list(VULNERABLE), hid, hid))
-            (fat, inj, inc6, days_last, vuln, nsrc, gconf) = cur.fetchone()
-            cur.execute("""
-              select max(t.severity_weight)
-              from incident_defect d
-              join config_defect_taxonomy t on t.code = d.defect_type
-              where d.incident_id in (select id from incident where cluster_id=%s)
-                and t.maps_to_defects""", (hid,))
-            max_sev = cur.fetchone()[0]
+        cur.execute("""
+          select h.id, coalesce(sum(i.fatalities),0), coalesce(sum(i.injuries),0),
+                 count(i.id) filter (where i.crash_date >= %s::date - interval '6 months'),
+                 %s::date - max(i.crash_date),
+                 avg(case when i.victim_types && %s::text[] then 1.0 else 0.0 end),
+                 avg(i.geocode_confidence)
+          from hotspot h left join incident i on i.cluster_id = h.id
+          group by h.id""", (today, today, list(VULNERABLE)))
+        agg = {r[0]: r[1:] for r in cur.fetchall()}
+
+        cur.execute("""
+          select i2.cluster_id, count(distinct s.source_article_id)
+          from incident_source s join incident i2 on i2.id = s.incident_id
+          where i2.cluster_id is not null group by i2.cluster_id""")
+        sources = dict(cur.fetchall())
+
+        cur.execute("""
+          select i.cluster_id, max(t.severity_weight)
+          from incident_defect d
+          join config_defect_taxonomy t on t.code = d.defect_type
+          join incident i on i.id = d.incident_id
+          where t.maps_to_defects and i.cluster_id is not null
+          group by i.cluster_id""")
+        severity = dict(cur.fetchall())
+
+        ids, scores, breakdowns, escalates = [], [], [], []
+        for hid, (fat, inj, inc6, days_last, vuln, gconf) in agg.items():
             raw = {"fatalities": int(fat), "injuries": int(inj), "inc_6mo": int(inc6),
                    "days_since_last": days_last if days_last is None else int(days_last),
-                   "vulnerable_share": float(vuln or 0), "max_severity": float(max_sev or 0),
-                   "n_sources": int(nsrc), "avg_geocode_conf": float(gconf or 0)}
+                   "vulnerable_share": float(vuln or 0),
+                   "max_severity": float(severity.get(hid) or 0),
+                   "n_sources": int(sources.get(hid, 0)),
+                   "avg_geocode_conf": float(gconf or 0)}
             comp = components(raw, cfg)
             score = total_score(comp, weights)
-            t = tier(score, cfg["priority_tiers"])
-            escalate = raw["inc_6mo"] >= esc["min_incidents"]
-            breakdown = {"raw": raw, "components": {k: round(v, 4) for k, v in comp.items()},
-                         "weights": weights, "tier": t, "computed_for": str(today)}
+            ids.append(hid)
+            scores.append(score)
+            breakdowns.append(json.dumps({
+                "raw": raw, "components": {k: round(v, 4) for k, v in comp.items()},
+                "weights": weights, "tier": tier(score, cfg["priority_tiers"]),
+                "computed_for": str(today)}))
+            escalates.append(raw["inc_6mo"] >= esc["min_incidents"])
+
+        if ids:
             cur.execute("""
-              update hotspot set priority_score=%s, score_breakdown=%s::jsonb,
-                escalation_candidate=%s, last_recomputed_at=now() where id=%s""",
-                (score, json.dumps(breakdown), escalate, hid))
-            scored += 1
+              update hotspot h
+              set priority_score = d.score, score_breakdown = d.bd::jsonb,
+                  escalation_candidate = d.esc, last_recomputed_at = now()
+              from (select unnest(%s::int[]) id, unnest(%s::float8[]) score,
+                           unnest(%s::text[]) bd, unnest(%s::bool[]) esc) d
+              where h.id = d.id""", (ids, scores, breakdowns, escalates))
         conn.commit()
-    return {"hotspots_scored": scored}
+    return {"hotspots_scored": len(ids)}
