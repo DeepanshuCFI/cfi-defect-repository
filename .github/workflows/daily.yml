@@ -76,6 +76,37 @@ jobs:
         if: steps.guard.outputs.go == 'yes'
         run: pip install -r requirements.txt
 
+      # Inference runs on the owner's Claude subscription, not the API. The token comes
+      # from `claude setup-token` and is valid ONE YEAR — when it expires this step still
+      # succeeds and the next one fails loudly on the auth check, which is the intended
+      # order: fail on a dead credential, never fall through to paid API calls.
+      - name: Install Claude Code CLI (subscription inference backend)
+        if: steps.guard.outputs.go == 'yes'
+        run: npm install -g @anthropic-ai/claude-code
+
+      # Fail fast and LOUDLY rather than silently billing. Two ways this run could
+      # quietly cost money instead of using the plan: a dead/absent token, or
+      # LLM_BACKEND not reaching the process. Both are caught here, before any work.
+      - name: Verify the subscription backend is actually in effect
+        if: steps.guard.outputs.go == 'yes'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          STATUS=$(claude auth status 2>&1 || true)
+          echo "$STATUS" | python3 -c "
+          import json, sys
+          raw = sys.stdin.read()
+          try:
+              d = json.loads(raw)
+          except Exception:
+              sys.exit(f'auth status unreadable — token missing or invalid:\n{raw[:300]}')
+          if not d.get('loggedIn'):
+              sys.exit('claude is not logged in — refresh CLAUDE_CODE_OAUTH_TOKEN')
+          if d.get('authMethod') != 'claude.ai' or not d.get('subscriptionType'):
+              sys.exit(f\"would bill an API account, not the plan: {d}\")
+          print(f\"ok — {d['subscriptionType']} plan, authMethod={d['authMethod']}\")
+          "
+
       - name: Sync configs to DB (git config/ is the source of truth)
         if: steps.guard.outputs.go == 'yes'
         env:
@@ -85,7 +116,14 @@ jobs:
       - name: Run daily pipeline (collect -> process -> geocode -> recompute -> export)
         if: steps.guard.outputs.go == 'yes'
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # ANTHROPIC_API_KEY is deliberately ABSENT. With LLM_BACKEND=cli the adapter
+          # strips it from the child anyway, but leaving it here would mean a typo in
+          # LLM_BACKEND silently falls back to paid API calls. Without it, that mistake
+          # fails instead of billing. To roll back to the API, restore this line and
+          # drop LLM_BACKEND.
+          LLM_BACKEND: cli
+          LLM_CLI_MODEL: claude-opus-5
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}       # session-pooler URL (runners are IPv4-only)
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
