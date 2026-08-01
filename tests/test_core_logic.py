@@ -660,3 +660,45 @@ def test_cluster_floor_matches_the_clusterer():
     from pipeline.processing.cluster import MIN_GEOCODE_CONF
     assert _repair.CLUSTER_MIN_CONF == MIN_GEOCODE_CONF
 
+
+# ------------------------------------------------- resolver canary (the breaker's blind spot)
+from pipeline.run import resolver_alarm  # noqa: E402
+
+# Verbatim stage_stats.collect.resolver from the 1 Aug 2026 scheduled run (run 35).
+RUN_35 = {"ok": 1159, "failed": 27, "hit_mem": 1265, "hit_disk": 0,
+          "decoded_b64": 0, "skipped_throttled": 2618}
+
+
+def test_real_run_that_lost_half_its_collection_raises_the_alarm():
+    """The regression this canary exists for. The old test was ok/(ok+failed) = 98% and
+    stayed silent while 2,618 of 5,069 items went unresolved."""
+    msg = resolver_alarm(RUN_35)
+    assert msg is not None, "a run that dropped 52% of its collection reported green"
+    assert "2618" in msg and "52%" in msg
+
+
+def test_breaker_cannot_silence_the_alarm():
+    """`failed` is capped by the breaker at ~25. Losing MORE must never read as better:
+    holding failures fixed and growing the skipped pile has to keep the alarm on."""
+    worse = dict(RUN_35, skipped_throttled=5000)
+    assert resolver_alarm(worse) is not None
+
+
+def test_healthy_warm_cache_run_is_quiet():
+    """What a warm URL cache should look like: most items served from disk, few calls,
+    nothing skipped. This must not page anyone."""
+    assert resolver_alarm({"ok": 300, "failed": 5, "hit_mem": 1200, "hit_disk": 3500,
+                           "decoded_b64": 0, "skipped_throttled": 0}) is None
+
+
+def test_disk_hits_count_as_resolved_not_as_losses():
+    """A cache hit IS a resolution — if hit_disk were left out of the numerator the fix
+    that makes the pipeline healthy would be the thing that trips the alarm."""
+    assert resolver_alarm({"ok": 0, "failed": 0, "hit_mem": 0, "hit_disk": 5000,
+                           "decoded_b64": 0, "skipped_throttled": 0}) is None
+
+
+def test_tiny_or_missing_samples_never_fire():
+    assert resolver_alarm({"ok": 1, "failed": 40, "skipped_throttled": 0}) is None
+    assert resolver_alarm(None) is None
+    assert resolver_alarm({}) is None

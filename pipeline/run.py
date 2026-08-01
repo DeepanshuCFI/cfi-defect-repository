@@ -21,6 +21,36 @@ from pipeline.fetch import fetch_article              # noqa: E402
 from pipeline.store import get_store                  # noqa: E402
 
 
+# Share of collected feed items that may end a run without a usable publisher URL before
+# the run is called a failure. Unresolved items are never fetched and never extracted, so
+# this is the rate at which collection is silently thrown away.
+UNRESOLVED_MAX_SHARE = 0.25
+
+
+def resolver_alarm(r: dict | None) -> str | None:
+    """Whether the Google News resolver lost enough of this run's collection to fail it.
+
+    Judged on how many feed items ended up with a usable publisher URL — NOT on the hit
+    rate among attempts. The circuit breaker stops attempting after 25 consecutive
+    failures, which pins `failed` at ~25 no matter how bad things get, so an
+    ok/(ok+failed) test climbs towards 100% exactly as the run loses more articles. On
+    1 Aug 2026 it read 1159/1186 = 98% while 2,618 of 5,069 items (52%) went unresolved
+    and therefore unfetchable. A canary that a working circuit breaker silences is not a
+    canary. (Kept pure so the arithmetic is testable without a pipeline run.)
+    """
+    if not isinstance(r, dict):
+        return None
+    got = sum(r.get(k, 0) for k in ("ok", "hit_mem", "hit_disk", "decoded_b64"))
+    lost = r.get("failed", 0) + r.get("skipped_throttled", 0)
+    total = got + lost
+    if total < 50 or lost / total <= UNRESOLVED_MAX_SHARE:
+        return None
+    return (f"Google News resolver left {lost} of {total} feed items unresolved "
+            f"({lost / total:.0%}) — {r.get('failed', 0)} failed, "
+            f"{r.get('skipped_throttled', 0)} skipped after the breaker tripped. Those "
+            f"articles cannot be fetched and are being dropped")
+
+
 def tier_for(domain: str | None) -> str:
     if not domain:
         return "aggregator"
@@ -608,15 +638,11 @@ def cmd_daily(args) -> None:
 
     # The 'new == 0' canary above could never catch the throttle: collect kept producing
     # ~1,400 rows/day while over half of them were unresolved and therefore unfetchable.
-    # Judge the resolver on its own success rate, not on the row count. (31 Jul 2026)
-    r_stats = (c_stats or {}).get("resolver") if isinstance(c_stats, dict) else None
-    if isinstance(r_stats, dict):
-        attempted = r_stats.get("ok", 0) + r_stats.get("failed", 0)
-        if attempted >= 50 and r_stats["ok"] / attempted < 0.5:
-            canaries.append(
-                f"Google News resolver failed {r_stats['failed']}/{attempted} attempts "
-                f"({r_stats.get('skipped_throttled', 0)} more skipped after the breaker "
-                f"tripped) — those articles cannot be fetched and are being dropped")
+    # Judge the resolver on how much of the collection it loses. (31 Jul, fixed 1 Aug)
+    alarm = resolver_alarm((c_stats or {}).get("resolver")
+                           if isinstance(c_stats, dict) else None)
+    if alarm:
+        canaries.append(alarm)
 
     p_stats = stats.get("process")
     if isinstance(p_stats, dict):
