@@ -58,12 +58,14 @@ def test_geocode_method_always_in_controlled_vocabulary(monkeypatch):
     from pipeline.processing import geocode as gc
     for state, span in (("", 0.5), ("Odisha", 0.5), ("Uttar Pradesh", 47.0)):
         monkeypatch.setattr(gc, "_resolve", lambda q, s=state, sp=span: {
-            "lat": 27.5, "lon": 78.05, "state": s, "display": "x", "span_km": sp})
+            "lat": 27.5, "lon": 78.05, "state": s, "district": "Hathras",
+            "display": "x", "span_km": sp})
         for kwargs in ({}, {"admin_state": "Uttar Pradesh", "admin_district": "Hathras"}):
             g = gc.geocode("somewhere", **kwargs)
             if g["geocode_method"] is not None:
                 assert g["geocode_method"] in ALLOWED_GEOCODE_METHODS, g["geocode_method"]
-            assert g["geocode_qualifier"] in (None, "unanchored", "stateless_hit", "wide_area")
+            assert g["geocode_qualifier"] in (None, "unanchored", "stateless_hit",
+                                              "districtless_hit", "wide_area")
 
 
 # ---------------------------------------------------------------- geocode anchoring
@@ -83,7 +85,8 @@ def test_unanchored_geocode_capped_below_publish_bar(monkeypatch):
 def test_anchored_geocode_keeps_full_confidence(monkeypatch):
     from pipeline.processing import geocode as gc
     monkeypatch.setattr(gc, "_resolve", lambda q: {
-        "lat": 27.5, "lon": 78.05, "state": "Uttar Pradesh", "display": "Bisawar, Hathras, UP"})
+        "lat": 27.5, "lon": 78.05, "state": "Uttar Pradesh", "district": "Hathras",
+        "display": "Bisawar, Hathras, UP"})
     g = gc.geocode("near Bisawar village, Vidhipur road", admin_district="Hathras",
                    admin_state="Uttar Pradesh")
     assert g["geocode_confidence"] >= 0.6
@@ -112,8 +115,8 @@ def test_wide_area_hit_capped(monkeypatch):
     # 'Outer Ring Road, Delhi' family: a 47km way must not pin at 0.7
     from pipeline.processing import geocode as gc
     monkeypatch.setattr(gc, "_resolve", lambda q: {
-        "lat": 28.55, "lon": 77.19, "state": "Delhi", "display": "Outer Ring Road",
-        "span_km": 47.0})
+        "lat": 28.55, "lon": 77.19, "state": "Delhi", "district": "South Delhi",
+        "display": "Outer Ring Road", "span_km": 47.0})
     g = gc.geocode("Outer Ring Road", admin_state="Delhi", admin_district="South Delhi")
     assert g["geocode_confidence"] <= gc.WIDE_AREA_MAX_CONF < 0.6
     assert g["geocode_qualifier"] == "wide_area"
@@ -532,3 +535,76 @@ def test_cli_model_override_only_applies_to_cli(monkeypatch):
     assert llm.model_for("relevance") == "claude-opus-5"
     monkeypatch.setenv("LLM_BACKEND", "api")
     assert llm.model_for("relevance") != "claude-opus-5"   # config wins on the API path
+
+
+# ------------------------------------------------ district anchoring (1 Aug 2026)
+# The 18 Jul fix anchored geocodes to STATE and stopped a Hathras crash landing in
+# Odisha. It could not stop a Gopalganj crash landing in Nawada — both are Bihar.
+# Measured: 'NH-531, Gopalganj, Bihar' resolved to a road in NAWADA at 0.80, past the
+# 0.6 gate; three such pins from three districts clustered into one phantom hotspot,
+# and 34 of 35 escalation candidates were built that way. These cases are the real
+# ones from that audit.
+from pipeline.processing.geocode import _district_ok  # noqa: E402
+
+
+def test_confident_district_mismatch_is_rejected():
+    assert _district_ok("Nawada", "Gopalganj") is False        # hotspot #377
+    assert _district_ok("Purnia", "Munger") is False           # sampled 1 Aug
+    assert _district_ok("Gorakhpur", "Ambedkar Nagar") is False
+
+
+def test_renamed_districts_are_not_false_rejections():
+    """A naive equality check would reject correct pins for every renamed district —
+    1 of 3 sampled mismatches was this case, not an error."""
+    assert _district_ok("Aurangabad", "Chhatrapati Sambhajinagar") is True
+    assert _district_ok("Chhatrapati Sambhajinagar", "Aurangabad") is True
+    assert _district_ok("Allahabad", "Prayagraj") is True
+    assert _district_ok("Faizabad", "Ayodhya") is True
+    assert _district_ok("Gurgaon", "Gurugram") is True
+
+
+def test_district_suffix_and_case_tolerated():
+    assert _district_ok("Bareilly district", "Bareilly") is True
+    assert _district_ok("BAREILLY", "bareilly") is True
+
+
+def test_unknown_district_never_rejects_the_article():
+    """Missing on either side is handled by the confidence cap in geocode(), not by
+    dropping the record — the guard is for a CONFIDENT mismatch only."""
+    assert _district_ok("", "Gopalganj") is True
+    assert _district_ok("Nawada", None) is True
+    assert _district_ok("", None) is True
+
+
+def test_ladder_skips_a_wrong_district_hit(monkeypatch):
+    """The whole bug, end to end: the first ladder variant matches the right state but
+    the wrong district, and must be passed over rather than published."""
+    from pipeline.processing import geocode as g
+    calls = []
+
+    def fake_resolve(query):
+        calls.append(query)
+        if len(calls) == 1:                       # most-specific variant: wrong district
+            return {"lat": 24.9192, "lon": 85.5367, "state": "Bihar",
+                    "district": "Nawada", "display": "Nh20 531, Nawada", "span_km": 0.5}
+        return {"lat": 26.4641, "lon": 84.4400, "state": "Bihar",
+                "district": "Gopalganj", "display": "Gopalganj, Bihar", "span_km": 0.5}
+
+    monkeypatch.setattr(g, "_resolve", fake_resolve)
+    out = g.geocode("NH-531, Gopalganj, Bihar", road_name="NH-531",
+                    admin_district="Gopalganj", admin_state="Bihar")
+    assert len(calls) > 1, "stopped at the wrong-district hit instead of descending"
+    assert out["lat"] == 26.4641, "published the Nawada pin"
+
+
+def test_districtless_hit_is_capped_below_the_publish_bar(monkeypatch):
+    """A provider that returns no district leaves the guard unable to run. Unverified
+    is not verified — cap it rather than trust it at 0.80."""
+    from pipeline.processing import geocode as g
+    monkeypatch.setattr(g, "_resolve", lambda q: {
+        "lat": 25.0, "lon": 85.0, "state": "Bihar", "district": "",
+        "display": "somewhere, Bihar", "span_km": 0.5})
+    out = g.geocode("NH-531, Gopalganj, Bihar", road_name="NH-531",
+                    admin_district="Gopalganj", admin_state="Bihar")
+    assert out["geocode_confidence"] <= 0.6, "a districtless hit reached the publish bar"
+    assert out["geocode_qualifier"] == "districtless_hit"
