@@ -469,3 +469,66 @@ def test_corrupt_cache_file_does_not_kill_the_run(resolver, tmp_path):
     (tmp_path / "gnews.json").write_text("{not json")
     r._disk = None
     assert r.resolve_url(GURL.format("iiii"))[1] is True
+
+
+# ------------------------------------------------------- LLM backend adapter (1 Aug)
+# The subscription backend has no dollar cap to stop against — it has an opaque rate
+# limit that lands mid-run. The contract that makes a killed session cost nothing is:
+# a usage refusal raises RateLimited, run._api_limit_hit() recognises it, the stage
+# stops, and unfinished rows keep their processing_status so the next run resumes.
+# A missed rate-limit match would instead look like a per-item failure and silently
+# drop articles, so these guard the detection as much as the plumbing.
+from pipeline import llm  # noqa: E402
+
+
+def test_backend_defaults_to_api(monkeypatch):
+    monkeypatch.delenv("LLM_BACKEND", raising=False)
+    assert llm.backend() == "api", "importing the adapter must not switch backends"
+
+
+def test_cli_env_strips_api_credentials(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-propagate")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "should-not-propagate")
+    env = llm._cli_env()
+    assert "ANTHROPIC_API_KEY" not in env, "child would bill the API instead of the plan"
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
+
+
+@pytest.mark.parametrize("msg", [
+    "Rate limit exceeded", "You have hit your usage limit", "429 Too Many Requests",
+    "quota exhausted", "Limit reached — try again later",
+])
+def test_usage_refusals_are_rate_limited_not_item_failures(msg):
+    assert llm._RATE_LIMIT.search(msg), f"{msg!r} would be mistaken for a bad article"
+
+
+def test_ordinary_errors_are_not_mistaken_for_rate_limits():
+    for msg in ["connection reset", "invalid model", "no such file"]:
+        assert not llm._RATE_LIMIT.search(msg)
+
+
+def test_rate_limit_stops_the_stage_and_resumes_next_run():
+    """The whole resumability contract in one assertion."""
+    from pipeline.run import _api_limit_hit
+    assert _api_limit_hit(llm.RateLimited("usage limit")) is True
+    assert _api_limit_hit(RuntimeError("connection reset")) is False
+
+
+def test_json_extraction_tolerates_fences_and_preamble():
+    assert llm._extract_json('```json\n{"a": 1}\n```') == {"a": 1}
+    assert llm._extract_json('Sure, here it is: {"a": 2} — hope that helps') == {"a": 2}
+
+
+def test_json_extraction_refuses_rather_than_guesses():
+    import pytest as _p
+    for bad in ["", "no object here", "{unclosed", "[1,2,3]"]:
+        with _p.raises(llm.BackendError):
+            llm._extract_json(bad)
+
+
+def test_cli_model_override_only_applies_to_cli(monkeypatch):
+    monkeypatch.setenv("LLM_CLI_MODEL", "claude-opus-5")
+    monkeypatch.setenv("LLM_BACKEND", "cli")
+    assert llm.model_for("relevance") == "claude-opus-5"
+    monkeypatch.setenv("LLM_BACKEND", "api")
+    assert llm.model_for("relevance") != "claude-opus-5"   # config wins on the API path

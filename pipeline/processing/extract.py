@@ -12,12 +12,7 @@ out, original-language evidence snippets kept. No separate translate pass.
 import json
 import re
 
-import anthropic
-
-from pipeline import configload
-from pipeline.settings import ANTHROPIC_API_KEY, CONFIG_DIR
-
-_client: anthropic.Anthropic | None = None
+from pipeline.settings import CONFIG_DIR
 
 
 def taxonomy_codes() -> list[str]:
@@ -139,29 +134,14 @@ def extract(title: str | None, text: str,
             light: bool = False) -> tuple[dict, list[str]]:
     """light=True uses the cheap model — for pure-behaviour crashes that only feed
     location crash-frequency counts; infra-implicated coverage gets the strong model."""
-    models = configload.settings()["models"]
-    model = models.get("extraction_light", models["extraction"]) if light \
-        else models["extraction"]
+    from pipeline import llm
+    model = llm.model_for("extraction_light" if light else "extraction")
     pub = f"ARTICLE PUBLISHED: {published_at}\n" if published_at else ""
     content = (f"{pub}TITLE: {title or '(none)'}\n\nARTICLE:\n{text[:7000]}\n\n"
                "Resolve relative dates (e.g. 'on Friday', 'yesterday', weekday names "
                "with no year) against the published date above. If the article "
                "clearly reports an OLD crash (an anniversary/retrospective), keep the "
                "old date. If no date is derivable, use null.")
-    msg = _get_client().messages.create(
-        model=model, max_tokens=2000, system=SYSTEM,
-        tools=[build_tool()], tool_choice={"type": "tool", "name": "record_incident"},
-        messages=[{"role": "user", "content": content}])
-    from pipeline import llmcost
-    llmcost.add(model, msg.usage)
-    for block in msg.content:
-        if block.type == "tool_use":
-            return validate_snippets(dict(block.input), text)
-    raise RuntimeError("extraction returned no tool output")
-
-
-def _get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    return _client
+    from pipeline import llm
+    result = llm.structured(SYSTEM, build_tool(), content, model=model, max_tokens=2000)
+    return validate_snippets(result, text)
