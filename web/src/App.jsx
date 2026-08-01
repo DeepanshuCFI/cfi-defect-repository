@@ -123,7 +123,7 @@ export default function App() {
           {/* left panel */}
           <aside className="w-72 border-r border-border bg-white flex flex-col no-print">
             <div className="p-4 border-b border-border grid grid-cols-2 gap-2">
-              <Stat n={filtered.length} l="hotspots shown" />
+              <Stat n={filtered.length} l="locations shown" />
               <Stat n={meta.incidents} l="public incidents" />
               <Stat n={meta.fatalities} l="deaths on record" red />
               <Stat n={meta.injuries} l="injuries on record" />

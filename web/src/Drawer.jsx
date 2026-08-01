@@ -26,9 +26,17 @@ export default function Drawer({ feature, incidents, meta, tierColor, tierText, 
               style={{ background: tierColor[p.tier], color: tierText?.[p.tier] || '#fff' }}>
               {tierLabel[p.tier].toUpperCase()} · {Number(p.score).toFixed(1)}
             </span>
-            {p.escalation && (
+            {p.escalation ? (
               <span className="inline-flex items-center gap-1 font-heading font-bold text-[10px] px-2 py-0.5 rounded-full bg-danger text-white">
                 <Flag className="h-3 w-3" /> ESCALATION CANDIDATE
+              </span>
+            ) : (
+              /* cluster_min_points=1 means a lone report also forms a "hotspot".
+                 Say which this is rather than let the map imply a pattern. */
+              <span className="font-heading font-bold text-[10px] px-2 py-0.5 rounded-full border border-border text-muted-foreground">
+                {p.evidence === 'repeat'
+                  ? `${p.incidents} REPORTS AT THIS LOCATION`
+                  : 'SINGLE REPORT'}
               </span>
             )}
           </div>

@@ -19,6 +19,25 @@ from pipeline.settings import ROOT       # noqa: E402
 OUT = ROOT / "web" / "public" / "data"
 
 
+def evidence_class(n_public: int, escalation: bool) -> str:
+    """How much evidence stands behind this map location.
+
+    cluster_min_points = 1, so DBSCAN forms a cluster from a SINGLE incident and every
+    geocoded record becomes a "hotspot". Measured 1 Aug 2026: 540 of 645 public
+    hotspots (84%) held exactly one incident and 69% had no casualties at all. Calling
+    a lone pothole report a hotspot on a map government officials act from claims a
+    repeat pattern the evidence does not support.
+
+    Rather than raise min_points — which would delete single reports from the map
+    entirely, and a verified defect report IS evidence worth publishing — the class
+    ships with every feature so the surface can say what it actually has."""
+    if escalation:
+        return "escalation"      # >=3 incidents in 6 months (spec headline rule)
+    if (n_public or 0) >= 2:
+        return "repeat"          # more than one independent report at this location
+    return "single"              # one report — real evidence, not a pattern
+
+
 def tier_of(score, tiers):
     if score is None:
         return "watch"
@@ -57,6 +76,7 @@ def main() -> None:
                     "defects": dom or [], "score": score,
                     "tier": tier_of(score, tiers),
                     "breakdown": breakdown, "escalation": esc, "status": status,
+                    "evidence": evidence_class(n, esc),
                 }})
         (OUT / "hotspots.geojson").write_text(json.dumps(
             {"type": "FeatureCollection", "features": feats}, ensure_ascii=False))
@@ -93,6 +113,9 @@ def main() -> None:
         meta = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "hotspots": len(feats),
+            "by_evidence": {c: sum(1 for f in feats
+                                   if f["properties"]["evidence"] == c)
+                            for c in ("escalation", "repeat", "single")},
             "incidents": len(incidents),
             "fatalities": sum(i["fatalities"] for i in incidents),
             "injuries": sum(i["injuries"] for i in incidents),
