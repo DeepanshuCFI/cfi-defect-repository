@@ -16,7 +16,15 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 330    # 3 states (BR+UP+RJ, 146 districts) — collect alone can take ~2h
+    # 3 states (BR+UP+RJ, 146 districts) on the cli backend measures ~254min:
+    # collect ~170 + extract ~44 (18s/article, vs ~4s on the api) + the rest ~40.
+    # 330 left only 23% headroom once inference moved to the subscription, and a
+    # TIMEOUT cancels the job — making !cancelled() false, so export and deploy are
+    # SKIPPED and the site goes stale. That is the run #9 failure mode reached by
+    # the one condition its guards cannot cover. 360 is GitHub's ceiling.
+    # A 4th state projects to ~325min: prove collect times with a warm URL cache
+    # before adding one.
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v5
 
