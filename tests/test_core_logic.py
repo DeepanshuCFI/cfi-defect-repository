@@ -608,3 +608,55 @@ def test_districtless_hit_is_capped_below_the_publish_bar(monkeypatch):
                     admin_district="Gopalganj", admin_state="Bihar")
     assert out["geocode_confidence"] <= 0.6, "a districtless hit reached the publish bar"
     assert out["geocode_qualifier"] == "districtless_hit"
+
+
+# ---------------------------------------------------- district repair: who stops voting
+# The escalation flag counts every incident that CLUSTERS. cluster.py filters on
+# geocode_confidence and nothing else, so machine_ok records — never public, kept on
+# purpose so the >=3-in-6-months counter stays honest — vote too. The repair therefore
+# has to reach records the publish gate never applied to, and the right remedy for those
+# is a lower confidence, not a status change.
+import importlib.util as _ilu  # noqa: E402
+import pathlib as _pl  # noqa: E402
+
+_spec = _ilu.spec_from_file_location(
+    "repair_district_pins",
+    _pl.Path(__file__).resolve().parent.parent / "scripts" / "repair_district_pins.py")
+_repair = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_repair)
+
+
+def test_published_below_gate_demotes():
+    assert _repair.plan(published=True, new_conf=0.55) == "demote"
+
+
+def test_published_above_gate_keeps_its_pin():
+    assert _repair.plan(published=True, new_conf=0.8) == "keep"
+
+
+def test_nonpublic_at_same_confidence_keeps_voting():
+    """0.55 is below the 0.6 publish gate but above the 0.5 cluster floor. Demoting a
+    machine_ok record here would delete frequency evidence the escalation counter needs
+    — the pin is good enough to cluster on, it was only ever unfit to publish."""
+    assert _repair.plan(published=False, new_conf=0.55) == "keep"
+
+
+def test_nonpublic_below_cluster_floor_stops_voting():
+    assert _repair.plan(published=False, new_conf=0.4) == "stop_voting"
+
+
+def test_no_valid_location_never_leaves_the_record_voting():
+    """A re-geocode with no district-valid hit yields no confidence at all. Whatever the
+    status, the one outcome that must not happen is the old pin quietly standing."""
+    assert _repair.plan(published=True, new_conf=None) == "demote"
+    assert _repair.plan(published=False, new_conf=None) == "stop_voting"
+    assert _repair.plan(published=False, new_conf=0) == "stop_voting"
+
+
+def test_cluster_floor_matches_the_clusterer():
+    """If cluster.py's threshold moves and this constant does not, the repair starts
+    leaving voters behind (or silencing records that still cluster) with no test failing.
+    """
+    from pipeline.processing.cluster import MIN_GEOCODE_CONF
+    assert _repair.CLUSTER_MIN_CONF == MIN_GEOCODE_CONF
+
