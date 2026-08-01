@@ -75,7 +75,9 @@
       "adjudication_cost_per_item_usd": 0.015,
       "adjudication_new_allowance": 30,
       "adjudication_reserve_floor": 0.15,
-      "adjudication_reserve_cap": 0.5
+      "adjudication_reserve_cap": 0.5,
+      "_cli_budget_note": "NOTIONAL runaway guard for LLM_BACKEND=cli, not a bill. ~$0.10/article on that backend (20k tokens of agent overhead per call), so 20.0 ~= 200 articles/day, matched to intake. The rate limit is the real backstop.",
+      "llm_budget_usd_per_day_cli": 20.0
     },
     "health": {
       "db_size_alert_mb": 400,

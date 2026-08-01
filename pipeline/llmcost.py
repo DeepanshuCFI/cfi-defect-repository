@@ -43,7 +43,21 @@ def spent() -> float:
 
 
 def budget() -> float:
+    """The stage's ceiling for today.
+
+    On the API backend this is real money. On LLM_BACKEND=cli it is NOT: the meter
+    records the NOTIONAL cost of subscription tokens so /qa keeps a comparable measure
+    of work done, but nothing is billed. Comparing that notional figure to the API's
+    $1.95 cap throttled the pipeline to ~20 articles/day, because every CLI invocation
+    carries ~20k tokens of Claude Code system prompt that the API path does not pay
+    (measured 1 Aug 2026: $0.10/article on cli vs $0.0149 on api). The cli ceiling is
+    therefore a RUNAWAY GUARD sized to daily intake, not a spend limit — the real
+    backstop on that backend is the rate limit, which stops the stage gracefully and
+    resumes next run."""
     p = configload.settings().get("processing", {})
+    from pipeline import llm
+    if llm.backend() == "cli":
+        return float(p.get("llm_budget_usd_per_day_cli", 20.0))
     return float(p.get("llm_budget_usd_per_day", p.get("llm_budget_usd_per_run", 2.0)))
 
 
