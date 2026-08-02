@@ -102,7 +102,7 @@ jobs:
         run: |
           STATUS=$(claude auth status 2>&1 || true)
           echo "$STATUS" | python3 -c "
-          import json, sys
+          import json, os, sys
           raw = sys.stdin.read()
           try:
               d = json.loads(raw)
@@ -110,9 +110,25 @@ jobs:
               sys.exit(f'auth status unreadable — token missing or invalid:\n{raw[:300]}')
           if not d.get('loggedIn'):
               sys.exit('claude is not logged in — refresh CLAUDE_CODE_OAUTH_TOKEN')
-          if d.get('authMethod') != 'claude.ai' or not d.get('subscriptionType'):
-              sys.exit(f\"would bill an API account, not the plan: {d}\")
-          print(f\"ok — {d['subscriptionType']} plan, authMethod={d['authMethod']}\")
+          # Two legitimate shapes (verified 2 Aug 2026, the day the first CI run failed
+          # here): an interactive login reports authMethod 'claude.ai' plus
+          # subscriptionType; a \`claude setup-token\` credential in CLAUDE_CODE_OAUTH_TOKEN
+          # reports authMethod 'oauth_token' and NO subscriptionType. The original check
+          # was calibrated on the owner's Mac — the first shape — so the first real CI
+          # run was refused with 'would bill an API account'. A setup-token can only be
+          # minted from a subscription login, so in CI the billing question is settled
+          # by the token itself; what we CAN and do assert is that no API key is present
+          # for anything to silently fall back to.
+          method = d.get('authMethod')
+          if method == 'claude.ai' and d.get('subscriptionType'):
+              print(f\"ok — {d['subscriptionType']} plan (interactive login)\")
+          elif method == 'oauth_token':
+              if os.environ.get('ANTHROPIC_API_KEY'):
+                  sys.exit('ANTHROPIC_API_KEY is set alongside the oauth token — '
+                           'a failure here could silently bill the API. Remove it.')
+              print('ok — setup-token credential, no API key in env to fall back to')
+          else:
+              sys.exit(f'unrecognized auth shape, refusing to guess at billing: {d}')
           "
 
       - name: Sync configs to DB (git config/ is the source of truth)
