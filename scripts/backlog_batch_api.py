@@ -328,7 +328,10 @@ def cmd_apply_extraction(args) -> None:
                 stats["failed"] += 1
                 continue
             store.set_article_status(aid, "extracted")
-            if not inc["infra_implicated"]:
+            # .get, not [] — 1 of 4,311 batch results omitted the key despite the
+            # forced tool schema. Missing = crash-only (fail-closed: machine_ok can
+            # never publish; treating it as infra-implicated could).
+            if not inc.get("infra_implicated"):
                 store.set_incident_status(iid, "machine_ok",
                     "crash-only at extraction (infra_implicated=false) -> machine_ok; "
                     "kept for crash-frequency counts")
