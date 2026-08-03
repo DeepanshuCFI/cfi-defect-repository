@@ -118,6 +118,46 @@ class DBStore:
                 return None
             return dict(zip([d.name for d in cur.description], row))
 
+    def article_statuses(self, ids: list[int]) -> dict[int, str]:
+        """Bulk status lookup — one round trip. Per-row lookups cost 168ms each
+        against the Tokyo pooler; over thousands of batch results that is half an
+        hour of pure RTT and a wide window for a mid-stream network stall."""
+        if not ids:
+            return {}
+        with self.conn.cursor() as cur:
+            cur.execute("""select id, processing_status from source_article
+                           where id = any(%s)""", (list(ids),))
+            return dict(cur.fetchall())
+
+    def set_articles_status(self, ids: list[int], status: str,
+                            only_if: str | None = None) -> int:
+        """Bulk status write, optionally guarded on the current status so a row the
+        daily run already processed is left alone (the guard IS the concurrency
+        check — no separate read needed). Returns rows actually changed."""
+        if not ids:
+            return 0
+        sql = "update source_article set processing_status=%s where id = any(%s)"
+        params: list = [status, list(ids)]
+        if only_if:
+            sql += " and processing_status = %s"
+            params.append(only_if)
+        with self.conn.cursor() as cur:
+            cur.execute(sql, params)
+            n = cur.rowcount
+        self.conn.commit()
+        return n
+
+    def get_articles(self, ids: list[int]) -> list[dict]:
+        """Bulk fetch with clean_text — one round trip instead of one per article."""
+        if not ids:
+            return []
+        with self.conn.cursor() as cur:
+            cur.execute("""select id, url, outlet_name, language, state, district,
+                                  clean_text, published_at, processing_status
+                           from source_article where id = any(%s)""", (list(ids),))
+            cols = [d.name for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+
     def unresolved_articles(self, limit: int = 200) -> list[dict]:
         """'new' rows still holding a Google News redirector — resolution was throttled
         at collection time so they were never fetched, and nothing retried them (19,831
@@ -275,6 +315,26 @@ class JsonlStore:
 
     def get_article(self, article_id) -> dict | None:
         return next((dict(r) for r in self._rows if r["id"] == article_id), None)
+
+    def article_statuses(self, ids: list[int]) -> dict[int, str]:
+        want = set(ids)
+        return {r["id"]: r.get("processing_status")
+                for r in self._rows if r["id"] in want}
+
+    def set_articles_status(self, ids: list[int], status: str,
+                            only_if: str | None = None) -> int:
+        want, n = set(ids), 0
+        for r in self._rows:
+            if r["id"] in want and (only_if is None
+                                    or r.get("processing_status") == only_if):
+                r["processing_status"] = status
+                n += 1
+        self._flush()
+        return n
+
+    def get_articles(self, ids: list[int]) -> list[dict]:
+        want = set(ids)
+        return [dict(r) for r in self._rows if r["id"] in want]
 
     def unresolved_articles(self, limit: int = 200) -> list[dict]:
         out = [dict(r) for r in self._rows

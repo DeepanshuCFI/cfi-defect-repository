@@ -187,36 +187,42 @@ def cmd_apply_relevance(args) -> None:
     if _batch_status(client, bid).processing_status != "ended":
         sys.exit("batch not finished — try again later")
 
-    store = ResilientStore()
-    stats = {"irrelevant": 0, "in_scope": 0, "skipped_status_changed": 0, "errored": 0}
-    in_scope: dict[str, str] = {}                 # article_id -> kind
-    try:
-        for result in client.messages.batches.results(bid):
-            aid = int(result.custom_id.removeprefix("rel-"))
-            if result.result.type != "succeeded":
-                stats["errored"] += 1
-                continue
+    # Drain ALL results into memory before touching the DB. The first version
+    # interleaved two Tokyo round trips per result with the Anthropic stream —
+    # ~36 minutes of pure RTT for 6,543 results, and a single mid-stream network
+    # stall (Operation timed out, on the retry too) killed the whole apply.
+    verdicts: dict[int, dict] = {}
+    errored = 0
+    for result in client.messages.batches.results(bid):
+        aid = int(result.custom_id.removeprefix("rel-"))
+        cls = None
+        if result.result.type == "succeeded":
             cls = next((b.input for b in result.result.message.content
                         if b.type == "tool_use"), None)
-            if cls is None:
-                stats["errored"] += 1
-                continue
-            # The daily run may have processed this article while the batch ran.
-            art = store.get_article(aid)
-            if not art or art.get("processing_status") != "fetched":
-                stats["skipped_status_changed"] += 1
-                continue
-            if not cls.get("in_scope"):
-                store.set_article_status(aid, "irrelevant")
-                stats["irrelevant"] += 1
-            else:
-                in_scope[str(aid)] = cls.get("kind") or "both"
-                stats["in_scope"] += 1
+        if cls is None:
+            errored += 1
+            continue
+        verdicts[aid] = cls
+    print(f"drained {len(verdicts)} verdict(s), {errored} errored")
+
+    store = ResilientStore()
+    try:
+        # One bulk read decides scope; the guarded bulk write IS the concurrency
+        # check — an article the daily run already processed no longer has
+        # status 'fetched' and is left alone by the WHERE clause.
+        statuses = store.article_statuses(list(verdicts))
+        out_ids = [a for a, c in verdicts.items()
+                   if not c.get("in_scope") and statuses.get(a) == "fetched"]
+        in_scope = {str(a): (c.get("kind") or "both") for a, c in verdicts.items()
+                    if c.get("in_scope") and statuses.get(a) == "fetched"}
+        skipped = len(verdicts) - len(out_ids) - len(in_scope)
+        n = store.set_articles_status(out_ids, "irrelevant", only_if="fetched")
     finally:
         store.close()
     state.update({"relevance_applied": True, "in_scope": in_scope})
     _save_state(state)
-    print(f"DONE {stats}")
+    print(f"DONE irrelevant={n} in_scope={len(in_scope)} "
+          f"skipped_status_changed={skipped} errored={errored}")
     print("next: python3 scripts/backlog_batch_api.py submit-extraction")
 
 
@@ -228,11 +234,12 @@ def cmd_submit_extraction(args) -> None:
     proc_cfg = configload.settings().get("processing", {})
     tiered = proc_cfg.get("tiered_extraction", True)
 
-    store = get_store()
+    store = ResilientStore()
     requests, n_light = [], 0
     try:
+        arts = {a["id"]: a for a in store.get_articles([int(s) for s in in_scope])}
         for aid_s, kind in in_scope.items():
-            a = store.get_article(int(aid_s))
+            a = arts.get(int(aid_s))
             if not a or a.get("processing_status") != "fetched":
                 continue
             text = a.get("clean_text") or ""
@@ -281,24 +288,31 @@ def cmd_apply_extraction(args) -> None:
     if _batch_status(client, bid).processing_status != "ended":
         sys.exit("batch not finished — try again later")
 
-    store = ResilientStore()
+    # Drain results first (same rationale as apply-relevance), then one bulk
+    # article fetch; only the inserts are per-row — they are multi-statement
+    # writes and must stay individual.
+    drained: list[tuple[int, bool, dict]] = []
     stats = {"extracted": 0, "extracted_light": 0, "machine_ok": 0, "failed": 0,
              "skipped_status_changed": 0, "errored": 0, "snippets_dropped": 0}
-    try:
-        for result in client.messages.batches.results(bid):
-            aid_s, flag = result.custom_id.removeprefix("ext-").rsplit("-", 1)
-            aid, light = int(aid_s), flag == "l"
-            a = store.get_article(aid)
-            if not a or a.get("processing_status") != "fetched":
-                stats["skipped_status_changed"] += 1
-                continue
-            if result.result.type != "succeeded":
-                stats["errored"] += 1
-                continue                          # stays 'fetched' — daily run retries
+    for result in client.messages.batches.results(bid):
+        aid_s, flag = result.custom_id.removeprefix("ext-").rsplit("-", 1)
+        raw = None
+        if result.result.type == "succeeded":
             raw = next((b.input for b in result.result.message.content
                         if b.type == "tool_use"), None)
-            if raw is None:
-                stats["errored"] += 1
+        if raw is None:
+            stats["errored"] += 1                 # stays 'fetched' — daily run retries
+            continue
+        drained.append((int(aid_s), flag == "l", dict(raw)))
+    print(f"drained {len(drained)} extraction(s), {stats['errored']} errored")
+
+    store = ResilientStore()
+    try:
+        arts = {a["id"]: a for a in store.get_articles([d[0] for d in drained])}
+        for aid, light, raw in drained:
+            a = arts.get(aid)
+            if not a or a.get("processing_status") != "fetched":
+                stats["skipped_status_changed"] += 1
                 continue
             text = a.get("clean_text") or ""
             inc, dropped = ex.validate_snippets(dict(raw), text)
