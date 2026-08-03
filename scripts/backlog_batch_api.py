@@ -315,7 +315,16 @@ def cmd_apply_extraction(args) -> None:
                 stats["skipped_status_changed"] += 1
                 continue
             text = a.get("clean_text") or ""
-            inc, dropped = ex.validate_snippets(dict(raw), text)
+            try:
+                inc, dropped = ex.validate_snippets(dict(raw), text)
+            except Exception as e:
+                # Malformed model output (e.g. defects as strings, not objects).
+                # cmd_process marks these 'failed' and moves on — same here; one
+                # bad extraction must never kill the remaining thousands.
+                print(f"  WARN malformed extraction #{aid}: {e}")
+                store.set_article_status(aid, "failed")
+                stats["failed"] += 1
+                continue
             stats["snippets_dropped"] += len(dropped)
             inc["location_text_raw"] = inc.get("location_text_best")
             inc["primary_source_id"] = aid
