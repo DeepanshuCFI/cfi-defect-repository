@@ -93,7 +93,7 @@ export default function App() {
         <div className="px-5 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-4 min-w-0">
             {/* brand rule: logo min-width 180px — below sm we show the text title only */}
-            <img src="cfi-logo.svg" alt="Crashfree India" className="h-9 w-auto shrink-0 hidden sm:block" />
+            <img src="cfi-logo.svg" alt="Crashfree India" className="h-6 w-auto shrink-0 hidden sm:block" />
             <span className="h-6 w-px bg-border shrink-0 hidden sm:block" aria-hidden="true" />
             <span className="font-heading font-bold text-brand text-[15px] truncate">
               Road Infrastructure Defect Repository
