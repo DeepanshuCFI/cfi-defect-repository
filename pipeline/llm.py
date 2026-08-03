@@ -50,6 +50,14 @@ class RateLimited(RuntimeError):
     the work is fine, the quota is not. Stop the stage and resume next run."""
 
 
+class CredentialError(RuntimeError):
+    """The backend refused the credential itself — dead, revoked, or expired token.
+    Never a per-item failure and never worth retrying the next item: run 36 (2 Aug)
+    burned 887 identical 401s at ~3s each because this arrived as BackendError and was
+    WARN'd per article while the run stayed green. run._raise_if_credential_error maps
+    this to ApiCredentialError, which is run-fatal by design (audit, 19 Jul)."""
+
+
 class BackendError(RuntimeError):
     """The backend could not produce a usable structured result for this item."""
 
@@ -88,6 +96,14 @@ _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
 _RATE_LIMIT = re.compile(
     r"rate.?limit|usage limit|quota|too many requests|429|"
     r"limit reached|try again (later|in)", re.I)
+# Auth failure as the CLI reports it (verbatim from run 36: "Failed to authenticate.
+# API Error: 401 OAuth access token is invalid."). Checked BEFORE _RATE_LIMIT: a
+# credential refusal must stop the run, and nothing in these phrases overlaps the
+# usage-limit vocabulary above. Matched only against the CLI's error text, never
+# against article content.
+_AUTH_FAIL = re.compile(
+    r"failed to authenticate|401|403|invalid (api key|x-api-key)|"
+    r"oauth.{0,40}(invalid|expired|revoked)|authentication_error", re.I)
 
 
 def cli_bin() -> str:
@@ -139,6 +155,8 @@ def _cli(system, tool, content, model, max_tokens):
 
     if not p.stdout.strip():
         err = (p.stderr or "")[:400]
+        if _AUTH_FAIL.search(err):
+            raise CredentialError(err)
         if _RATE_LIMIT.search(err):
             raise RateLimited(err)
         raise BackendError(f"cli exited {p.returncode}: {err}")
@@ -149,6 +167,8 @@ def _cli(system, tool, content, model, max_tokens):
 
     result = env.get("result") or ""
     if env.get("is_error"):
+        if _AUTH_FAIL.search(result) or _AUTH_FAIL.search(p.stderr or ""):
+            raise CredentialError(result[:300])
         if _RATE_LIMIT.search(result) or _RATE_LIMIT.search(p.stderr or ""):
             raise RateLimited(result[:300])
         raise BackendError(f"cli error: {result[:300]}")

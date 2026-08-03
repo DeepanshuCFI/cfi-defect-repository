@@ -130,6 +130,26 @@ jobs:
           else:
               sys.exit(f'unrecognized auth shape, refusing to guess at billing: {d}')
           "
+          # `claude auth status` only reads local config — it said "ok" on 2 Aug while
+          # the token was already revoked server-side, and the 401 surfaced three hours
+          # later, 887 times, mid-pipeline. One real round-trip settles it up front.
+          # stdout only: the CLI's stderr carries node deprecation noise (seen in run
+          # 36's log) that would corrupt the JSON envelope. An auth refusal still
+          # arrives as an is_error envelope on stdout.
+          PING=$(timeout 180 claude -p "Reply with exactly: ok" \
+                 --model claude-haiku-4-5-20251001 \
+                 --output-format json --max-turns 1 2>/dev/null || true)
+          echo "$PING" | python3 -c "
+          import json, sys
+          raw = sys.stdin.read()
+          try:
+              env = json.loads(raw)
+          except Exception:
+              sys.exit(f'live auth ping produced no envelope — token dead or CLI broken:\n{raw[:300]}')
+          if env.get('is_error'):
+              sys.exit(f\"live auth ping refused — token invalid server-side, refresh CLAUDE_CODE_OAUTH_TOKEN:\n{str(env.get('result'))[:300]}\")
+          print('ok — live round-trip succeeded, token valid server-side')
+          "
 
       - name: Sync configs to DB (git config/ is the source of truth)
         if: steps.guard.outputs.go == 'yes'

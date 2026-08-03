@@ -826,3 +826,74 @@ def test_declared_fields_match_what_mapbox_actually_writes(monkeypatch):
     written = g._mapbox("anywhere")
     assert set(written) == set(g._MB_FIELDS), (
         f"_mapbox writes {set(written)} but _MB_FIELDS declares {set(g._MB_FIELDS)}")
+
+
+# --------------------------------------------- cli credential refusal must stop the run
+# Run 36 (2 Aug): a revoked oauth token arrived as BackendError and was WARN'd per
+# article — 887 identical 401s over 40 minutes, zero work done, run reported green.
+# The classification lives in llm._cli; run._raise_if_credential_error maps it to the
+# run-fatal ApiCredentialError every stage already checks for.
+from pipeline import llm as _llm  # noqa: E402
+
+# Verbatim from run 36's log.
+RUN36_401 = "Failed to authenticate. API Error: 401 OAuth access token is invalid."
+
+
+def _fake_cli(monkeypatch, stdout="", stderr="", returncode=1):
+    class P:
+        pass
+    P.stdout, P.stderr, P.returncode = stdout, stderr, returncode
+    monkeypatch.setattr(_llm, "cli_bin", lambda: "/fake/claude")
+    monkeypatch.setattr(_llm.subprocess, "run", lambda *a, **k: P)
+
+
+TOOL = {"input_schema": {"type": "object"}}
+
+
+def test_cli_401_raises_credential_error_not_backend_error(monkeypatch):
+    import json, pytest
+    _fake_cli(monkeypatch,
+              stdout=json.dumps({"is_error": True, "result": RUN36_401}))
+    with pytest.raises(_llm.CredentialError):
+        _llm._cli("sys", TOOL, "content", "model-x", 100)
+
+
+def test_cli_401_on_stderr_with_empty_stdout_also_credential(monkeypatch):
+    import pytest
+    _fake_cli(monkeypatch, stdout="", stderr=RUN36_401)
+    with pytest.raises(_llm.CredentialError):
+        _llm._cli("sys", TOOL, "content", "model-x", 100)
+
+
+def test_cli_rate_limit_still_rate_limited(monkeypatch):
+    """The credential check must not swallow the usage-refusal path — RateLimited keeps
+    its stop-and-resume semantics."""
+    import json, pytest
+    _fake_cli(monkeypatch,
+              stdout=json.dumps({"is_error": True,
+                                 "result": "usage limit reached, try again later"}))
+    with pytest.raises(_llm.RateLimited):
+        _llm._cli("sys", TOOL, "content", "model-x", 100)
+
+
+def test_cli_other_error_stays_per_item(monkeypatch):
+    import json, pytest
+    _fake_cli(monkeypatch,
+              stdout=json.dumps({"is_error": True, "result": "model overloaded"}))
+    with pytest.raises(_llm.BackendError):
+        _llm._cli("sys", TOOL, "content", "model-x", 100)
+
+
+def test_credential_error_is_mapped_to_run_fatal():
+    """Every WARN site calls _raise_if_credential_error before logging — the mapping is
+    what turns 887 warnings into one red run."""
+    import pytest
+    from pipeline.run import ApiCredentialError, _raise_if_credential_error
+    with pytest.raises(ApiCredentialError):
+        _raise_if_credential_error(_llm.CredentialError(RUN36_401))
+
+
+def test_non_credential_errors_pass_through_the_mapper():
+    from pipeline.run import _raise_if_credential_error
+    _raise_if_credential_error(_llm.BackendError("model overloaded"))   # no raise
+    _raise_if_credential_error(ValueError("unrelated"))                 # no raise

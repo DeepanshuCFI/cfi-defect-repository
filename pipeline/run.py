@@ -241,6 +241,13 @@ class ApiCredentialError(RuntimeError):
 
 
 def _raise_if_credential_error(e: Exception) -> None:
+    # CLI backend: llm._cli classifies the CLI's error text itself. Run 36 (2 Aug)
+    # proved the gap — a revoked oauth token arrived as BackendError and was WARN'd
+    # per article, 887 times, while the run stayed green.
+    from pipeline.llm import CredentialError
+    if isinstance(e, CredentialError):
+        raise ApiCredentialError(f"cli credential refused: {str(e)[:200]}") from e
+    # API backend: the SDK raises typed exceptions with a status code.
     name = type(e).__name__
     if name in ("AuthenticationError", "PermissionDeniedError"):
         raise ApiCredentialError(f"{name}: {str(e)[:200]}") from e
