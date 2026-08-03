@@ -105,6 +105,19 @@ class DBStore:
                         (status, article_id))
         self.conn.commit()
 
+    def get_article(self, article_id) -> dict | None:
+        """One article with its CURRENT status. The batch backlog script re-checks
+        status right before every write — the daily run may have processed the same
+        article while a batch was pending, and last-write-wins would double-extract."""
+        with self.conn.cursor() as cur:
+            cur.execute("""select id, url, outlet_name, language, state, district,
+                                  clean_text, published_at, processing_status
+                           from source_article where id = %s""", (article_id,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return dict(zip([d.name for d in cur.description], row))
+
     def unresolved_articles(self, limit: int = 200) -> list[dict]:
         """'new' rows still holding a Google News redirector — resolution was throttled
         at collection time so they were never fetched, and nothing retried them (19,831
@@ -259,6 +272,9 @@ class JsonlStore:
             if r["id"] == article_id:
                 r["processing_status"] = status
         self._flush()
+
+    def get_article(self, article_id) -> dict | None:
+        return next((dict(r) for r in self._rows if r["id"] == article_id), None)
 
     def unresolved_articles(self, limit: int = 200) -> list[dict]:
         out = [dict(r) for r in self._rows
