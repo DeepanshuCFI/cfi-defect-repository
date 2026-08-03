@@ -122,41 +122,55 @@ class DBStore:
         """Bulk status lookup — one round trip. Per-row lookups cost 168ms each
         against the Tokyo pooler; over thousands of batch results that is half an
         hour of pure RTT and a wide window for a mid-stream network stall."""
-        if not ids:
-            return {}
-        with self.conn.cursor() as cur:
-            cur.execute("""select id, processing_status from source_article
-                           where id = any(%s)""", (list(ids),))
-            return dict(cur.fetchall())
+        out: dict[int, str] = {}
+        ids = list(ids)
+        for i in range(0, len(ids), 2000):
+            with self.conn.cursor() as cur:
+                cur.execute("""select id, processing_status from source_article
+                               where id = any(%s)""", (ids[i:i + 2000],))
+                out.update(dict(cur.fetchall()))
+        return out
 
     def set_articles_status(self, ids: list[int], status: str,
-                            only_if: str | None = None) -> int:
+                            only_if: str | None = None, chunk: int = 500) -> int:
         """Bulk status write, optionally guarded on the current status so a row the
         daily run already processed is left alone (the guard IS the concurrency
-        check — no separate read needed). Returns rows actually changed."""
+        check — no separate read needed). Returns rows actually changed.
+
+        Chunked: one UPDATE over ~4,000 rows tripped the pooler's statement
+        timeout (QueryCanceled, 3 Aug) — per-chunk statements stay well under it
+        and each chunk commits on its own, so a failure loses one chunk, not all."""
         if not ids:
             return 0
         sql = "update source_article set processing_status=%s where id = any(%s)"
-        params: list = [status, list(ids)]
         if only_if:
             sql += " and processing_status = %s"
-            params.append(only_if)
-        with self.conn.cursor() as cur:
-            cur.execute(sql, params)
-            n = cur.rowcount
-        self.conn.commit()
-        return n
+        total = 0
+        ids = list(ids)
+        for i in range(0, len(ids), chunk):
+            params: list = [status, ids[i:i + chunk]]
+            if only_if:
+                params.append(only_if)
+            with self.conn.cursor() as cur:
+                cur.execute(sql, params)
+                total += cur.rowcount
+            self.conn.commit()
+        return total
 
-    def get_articles(self, ids: list[int]) -> list[dict]:
-        """Bulk fetch with clean_text — one round trip instead of one per article."""
-        if not ids:
-            return []
-        with self.conn.cursor() as cur:
-            cur.execute("""select id, url, outlet_name, language, state, district,
-                                  clean_text, published_at, processing_status
-                           from source_article where id = any(%s)""", (list(ids),))
-            cols = [d.name for d in cur.description]
-            return [dict(zip(cols, r)) for r in cur.fetchall()]
+    def get_articles(self, ids: list[int], chunk: int = 300) -> list[dict]:
+        """Bulk fetch with clean_text — chunked for the same statement-timeout
+        reason as set_articles_status (thousands of multi-KB rows per statement)."""
+        out: list[dict] = []
+        ids = list(ids)
+        for i in range(0, len(ids), chunk):
+            with self.conn.cursor() as cur:
+                cur.execute("""select id, url, outlet_name, language, state, district,
+                                      clean_text, published_at, processing_status
+                               from source_article where id = any(%s)""",
+                            (ids[i:i + chunk],))
+                cols = [d.name for d in cur.description]
+                out.extend(dict(zip(cols, r)) for r in cur.fetchall())
+        return out
 
     def unresolved_articles(self, limit: int = 200) -> list[dict]:
         """'new' rows still holding a Google News redirector — resolution was throttled
