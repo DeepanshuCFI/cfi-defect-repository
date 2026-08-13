@@ -897,3 +897,72 @@ def test_non_credential_errors_pass_through_the_mapper():
     from pipeline.run import _raise_if_credential_error
     _raise_if_credential_error(_llm.BackendError("model overloaded"))   # no raise
     _raise_if_credential_error(ValueError("unrelated"))                 # no raise
+
+
+# ---------------------------------------------------------------------------
+# collect_district log line — fetch-failure regression (runs 44/46, 10-11 Aug 2026)
+
+class _CollectStore:
+    def seen_url(self, url): return False
+    def near_duplicate(self, *a, **kw): return False
+    def insert_article(self, row): return 1
+
+
+def _feed_item(url, title="feed title"):
+    from pipeline.collectors.rss import FeedItem
+    return FeedItem(url=url, google_url=url, title=title, published_at=None,
+                    source_name="Outlet", source_domain="outlet.example",
+                    query="q", language="en", resolved=True)
+
+
+def _collect_args():
+    import argparse
+    return argparse.Namespace(lang_terms=3, days=2, max_per_query=30,
+                              delay=0, no_fetch=False)
+
+
+def _patch_collect_env(monkeypatch, items, fetcher):
+    from pipeline import run as run_mod
+    monkeypatch.setattr(run_mod.configload, "keywords", lambda: {})
+    monkeypatch.setattr(run_mod.configload, "settings", lambda: {})
+    monkeypatch.setattr(run_mod.configload, "outlet_tiers", lambda: {})
+    monkeypatch.setattr(run_mod.rss, "build_queries",
+                        lambda d, kw, max_lang_terms: [("q", "en")])
+    monkeypatch.setattr(run_mod.rss, "collect", lambda *a, **kw: items)
+    monkeypatch.setattr(run_mod, "fetch_article", fetcher)
+    return run_mod
+
+
+def test_collect_survives_first_fetch_failure(monkeypatch, capsys):
+    """When the district's FIRST resolved item raises on fetch, the log line used to
+    read the never-assigned fetch result — the UnboundLocalError killed the entire
+    collect stage for the run. The item must still insert as 'new', logged under its
+    feed title."""
+    def _boom(url, delay_s):
+        raise OSError("connection reset")
+    run_mod = _patch_collect_env(monkeypatch, [_feed_item("https://outlet.example/a")], _boom)
+    st = run_mod.collect_district({"state": "Bihar", "district": "Supaul"},
+                                  _CollectStore(), _collect_args())
+    assert st["new"] == 1 and st["errors"] == 1
+    assert "feed title" in capsys.readouterr().out
+
+
+def test_collect_failed_fetch_never_logs_previous_items_title(monkeypatch, capsys):
+    """A failed fetch after a successful one used to print the PREVIOUS item's page
+    title (f survived the loop iteration) — same root cause, cosmetic symptom."""
+    from types import SimpleNamespace
+    def _fetch(url, delay_s):
+        if url.endswith("/b"):
+            raise OSError("connection reset")
+        return SimpleNamespace(blocked_by_robots=False, clean_text="body text",
+                               dedup_hash=None, url=url, published_at=None,
+                               title="PAGE TITLE FROM ITEM A")
+    items = [_feed_item("https://outlet.example/a", title="feed title A"),
+             _feed_item("https://outlet.example/b", title="feed title B")]
+    run_mod = _patch_collect_env(monkeypatch, items, _fetch)
+    st = run_mod.collect_district({"state": "Bihar", "district": "Supaul"},
+                                  _CollectStore(), _collect_args())
+    out = capsys.readouterr().out
+    assert st["new"] == 2
+    assert any("feed title B" in ln for ln in out.splitlines())
+    assert sum("PAGE TITLE FROM ITEM A" in ln for ln in out.splitlines()) == 1

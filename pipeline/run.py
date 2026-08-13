@@ -85,6 +85,11 @@ def collect_district(d: dict, store, args) -> dict:
                    "state": d["state"], "district": d["district"],
                    "published_at": it.published_at, "raw_html": None,
                    "clean_text": None, "dedup_hash": None, "processing_status": "new"}
+            # f must be (re)bound every item: a failed fetch leaves the try without
+            # assigning it, and the log line below would otherwise read the previous
+            # item's page — or crash unbound if the district's first fetch fails,
+            # killing the whole collect stage (runs 44/46, 10-11 Aug).
+            f = None
             if not args.no_fetch and it.resolved:
                 try:
                     f = fetch_article(it.url, delay_s=args.delay)
@@ -111,7 +116,7 @@ def collect_district(d: dict, store, args) -> dict:
             if store.insert_article(row) is not None:
                 stats["new"] += 1
                 mark = row["processing_status"]
-                print(f"  + [{mark}] ({it.language}) {(f.title if not args.no_fetch and it.resolved and f.title else it.title)[:78]}")
+                print(f"  + [{mark}] ({it.language}) {(f.title if f and f.title else it.title)[:78]}")
     return stats
 
 
