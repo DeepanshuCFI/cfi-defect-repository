@@ -58,9 +58,17 @@ jobs:
 
       # data/ is gitignored, so without this every run starts with a COLD geocode
       # cache and re-buys the same Mapbox/Nominatim lookups daily (audit finding).
+      #
+      # Both caches use explicit restore/save pairs, NOT the combined actions/cache:
+      # the combined action's post-job save is silently SKIPPED when the job fails,
+      # and a failing run is exactly when saving matters most. 10-13 Aug outage: one
+      # crashed run froze the URL cache, every later run re-resolved from a decaying
+      # cache, tripped Google's throttle, failed the resolver canary — and the failure
+      # kept blocking the save that would have re-warmed the cache. The save steps
+      # below run on failure too (!cancelled()), which breaks that loop.
       - name: Restore geocode cache
         if: steps.guard.outputs.go == 'yes'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: data/geocode_cache.json
           key: geocode-cache-${{ github.run_id }}
@@ -73,7 +81,7 @@ jobs:
       # ~800-1300 articles/day (31 Jul 2026). Warm cache = calls only for new articles.
       - name: Restore Google News URL cache
         if: steps.guard.outputs.go == 'yes'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: data/gnews_url_cache.json
           key: gnews-url-cache-${{ github.run_id }}
@@ -175,6 +183,23 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # site-watch pings; empty = console only
           PYTHONUNBUFFERED: "1"
         run: python -m pipeline.run daily --days 2
+
+      # Saves must run even when the pipeline step failed — see the restore comment.
+      # The run_id key is unique per run, so every save lands and the next restore's
+      # prefix match picks up the newest one.
+      - name: Save geocode cache
+        if: ${{ steps.guard.outputs.go == 'yes' && !cancelled() }}
+        uses: actions/cache/save@v4
+        with:
+          path: data/geocode_cache.json
+          key: geocode-cache-${{ github.run_id }}
+
+      - name: Save Google News URL cache
+        if: ${{ steps.guard.outputs.go == 'yes' && !cancelled() }}
+        uses: actions/cache/save@v4
+        with:
+          path: data/gnews_url_cache.json
+          key: gnews-url-cache-${{ github.run_id }}
 
       # Never deploy a dataless build over a good site: if export failed upstream,
       # web/public/data can be missing/empty and we would publish an empty map
