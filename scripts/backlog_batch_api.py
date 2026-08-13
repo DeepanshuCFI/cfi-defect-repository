@@ -156,9 +156,12 @@ def cmd_submit_relevance(args) -> None:
 
     client = _client()
     batch = client.messages.batches.create(requests=requests)
-    state.update({"relevance_batch_id": batch.id,
-                  "relevance_submitted": len(requests)})
-    _save_state(state)
+    # Fresh state, not update(): a new relevance round invalidates everything
+    # downstream (applied flags, in_scope, any extraction batch). Merging left the
+    # previous round's relevance_applied=True in place, which made `status` skip the
+    # new batch and print nothing (found 13 Aug, round 2 submit).
+    _save_state({"relevance_batch_id": batch.id,
+                 "relevance_submitted": len(requests)})
     print(f"SUBMITTED relevance batch {batch.id} ({batch.processing_status}); "
           f"poll with: python3 scripts/backlog_batch_api.py status")
 
@@ -275,8 +278,11 @@ def cmd_submit_extraction(args) -> None:
         sys.exit("nothing to extract")
     client = _client()
     batch = client.messages.batches.create(requests=requests)
+    # Same reason as the relevance submit: a resubmit must clear its round's
+    # applied flag or `status` goes silent on the new batch.
     state.update({"extraction_batch_id": batch.id,
                   "extraction_submitted": len(requests)})
+    state.pop("extraction_applied", None)
     _save_state(state)
     print(f"SUBMITTED extraction batch {batch.id}")
 
