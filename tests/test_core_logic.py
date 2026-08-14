@@ -966,3 +966,47 @@ def test_collect_failed_fetch_never_logs_previous_items_title(monkeypatch, capsy
     assert st["new"] == 2
     assert any("feed title B" in ln for ln in out.splitlines())
     assert sum("PAGE TITLE FROM ITEM A" in ln for ln in out.splitlines()) == 1
+
+
+# ---------------------------------------------------------------------------
+# resolver canary v2 — per-run loss demotes to a warning unless the aged backlog
+# shows the recovery path (nightly Mac-IP sweep) failing (14 Aug 2026)
+
+from pipeline.run import resolver_canary  # noqa: E402
+
+ALARM = "Google News resolver left 2600 of 5100 feed items unresolved (51%)"
+
+
+def test_resolver_canary_quiet_when_share_healthy():
+    # negative control: a growing pile with a HEALTHY resolver is collection volume,
+    # not a resolver failure — the canary must not claim otherwise
+    assert resolver_canary(None, 25_000, 20_000) is None
+
+
+def test_resolver_canary_demotes_when_backlog_shrinking():
+    assert resolver_canary(ALARM, 20_000, 23_000) is None
+
+
+def test_resolver_canary_fires_when_backlog_grows():
+    msg = resolver_canary(ALARM, 23_000, 20_000)
+    assert msg and "not keeping up" in msg and ALARM in msg
+
+
+def test_resolver_canary_grace_without_history():
+    assert resolver_canary(ALARM, 23_000, None) is None
+    assert resolver_canary(ALARM, None, 20_000) is None
+
+
+def test_resolver_canary_floor_ignores_small_piles():
+    # 1,900 aged rows is under two days of arrivals — routine churn, not a failure
+    assert resolver_canary(ALARM, 1_900, 100) is None
+
+
+def test_expired_status_is_in_the_migrated_vocabulary():
+    """The same-commit rule (migrations 012/013 lesson): code that writes a
+    CHECK-constrained term must ship with the migration declaring it."""
+    import pathlib
+    mig = pathlib.Path(__file__).resolve().parent.parent / "migrations"
+    latest = sorted(p for p in mig.glob("*.sql")
+                    if "processing_status" in p.read_text())[-1]
+    assert "'expired'" in latest.read_text()

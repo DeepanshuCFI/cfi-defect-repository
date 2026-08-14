@@ -7,7 +7,7 @@ Identical interface either way so collectors/CLI don't branch:
   store.counts() -> dict
 """
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from pipeline.settings import DATABASE_URL, ROOT
@@ -186,6 +186,30 @@ class DBStore:
             cols = [d.name for d in cur.description]
             return [dict(zip(cols, r)) for r in cur.fetchall()]
 
+    def expire_stale_unresolved(self, days: int = 30) -> int:
+        """TTL for 'new' rows still holding a Google redirector: past ~30 days the feed
+        id has rotted and retrying only burns per-IP resolver quota. 'expired' is
+        terminal; the row and URL are KEPT so seen_url still dedups re-collected items.
+        Vocabulary lives in migrations/014 (same-commit rule)."""
+        with self.conn.cursor() as cur:
+            cur.execute("""update source_article set processing_status='expired'
+                           where processing_status='new' and url like %s
+                             and created_at < now() - make_interval(days => %s)""",
+                        ("%news.google.com%", days))
+            return cur.rowcount
+
+    def aged_unresolved_count(self, hours: int = 48) -> int:
+        """'new' Google-redirector rows older than the recovery window (the nightly
+        Mac-IP sweep). The resolver canary judges THIS trend, not per-run loss — a
+        refused run is recoverable within a day, an aging pile is not. See
+        resolver_canary in run.py."""
+        with self.conn.cursor() as cur:
+            cur.execute("""select count(*) from source_article
+                           where processing_status='new' and url like %s
+                             and created_at < now() - make_interval(hours => %s)""",
+                        ("%news.google.com%", hours))
+            return cur.fetchone()[0]
+
     def update_article_fetch(self, article_id, url: str, clean_text: str,
                              dedup_hash: str, published_at, status: str) -> None:
         """Attach a late fetch to an existing row. `url` is unique-constrained, and a
@@ -355,6 +379,28 @@ class JsonlStore:
                if r.get("processing_status") == "new"
                and "news.google.com" in (r.get("url") or "")]
         return out[::-1][:limit]                       # newest first, as in DBStore
+
+    def expire_stale_unresolved(self, days: int = 30) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        n = 0
+        for r in self._rows:
+            ts = r.get("created_at") or r.get("fetched_at")
+            if (r.get("processing_status") == "new"
+                    and "news.google.com" in (r.get("url") or "")
+                    and ts and datetime.fromisoformat(ts) < cutoff):
+                r["processing_status"] = "expired"
+                n += 1
+        if n:
+            self._flush()
+        return n
+
+    def aged_unresolved_count(self, hours: int = 48) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        return sum(1 for r in self._rows
+                   if r.get("processing_status") == "new"
+                   and "news.google.com" in (r.get("url") or "")
+                   and (r.get("created_at") or "")
+                   and datetime.fromisoformat(r["created_at"]) < cutoff)
 
     def update_article_fetch(self, article_id, url: str, clean_text: str,
                              dedup_hash: str, published_at, status: str) -> None:

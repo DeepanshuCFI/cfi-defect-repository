@@ -51,6 +51,39 @@ def resolver_alarm(r: dict | None) -> str | None:
             f"articles cannot be fetched and are being dropped")
 
 
+# The resolver canary fails the run only when the aged unresolved pile is BOTH large
+# and growing. Floor: below ~2 days of arrivals the pile is routine churn. Growth
+# margin: day-to-day noise in feed volume; a genuine recovery failure adds 1,000+/day.
+RESOLVER_BACKLOG_FLOOR = 2000
+RESOLVER_BACKLOG_GROWTH_MIN = 250
+
+
+def resolver_canary(share_alarm: str | None, aged_now: int | None,
+                    aged_prev: int | None) -> str | None:
+    """Whether this run's resolver loss should FAIL the run, given the recovery path.
+
+    Since 14 Aug 2026 Google hard-blocks fresh decodes from GitHub runner IPs while a
+    nightly Mac-IP sweep (scheduled task defect-repo-url-sweep) recovers the refused
+    items within a day. Per-run loss alone therefore reads permanently red — and a
+    permanently red pipeline trains everyone to ignore real failures. So: the per-run
+    loss (resolver_alarm) demotes to a stats warning, and the run fails only when the
+    >48h-old unresolved pile is large AND grew since the previous run — i.e. the
+    recovery path is demonstrably not keeping up. No history (first run) and DB
+    hiccups get grace: this guard's job is trend judgement, not liveness — collect's
+    own canaries cover liveness. (Pure for testability.)
+    """
+    if not share_alarm:
+        return None
+    if aged_now is None or aged_prev is None:
+        return None
+    if aged_now < RESOLVER_BACKLOG_FLOOR:
+        return None
+    if aged_now - aged_prev < RESOLVER_BACKLOG_GROWTH_MIN:
+        return None
+    return (f"{share_alarm} — AND the >48h unresolved backlog grew "
+            f"{aged_prev} -> {aged_now}: the retry path is not keeping up")
+
+
 def tier_for(domain: str | None) -> str:
     if not domain:
         return "aggregator"
@@ -625,12 +658,20 @@ def cmd_daily(args) -> None:
             cur.execute("""update source_article set raw_html = null
                            where raw_html is not null""")
             purged = cur.rowcount
+            # TTL: 'new' rows still on a Google redirector after 30 days are dead —
+            # feed ids rot and retries only burn resolver quota. 'expired' is terminal
+            # but keeps the URL row for seen_url dedup (migration 014).
+            cur.execute("""update source_article set processing_status='expired'
+                           where processing_status='new' and url like %s
+                             and created_at < now() - interval '30 days'""",
+                        ("%news.google.com%",))
+            expired = cur.rowcount
             conn.commit()
         vc = connect()
         vc.autocommit = True
         vc.execute("vacuum source_article")
         vc.close()
-        return {"raw_html_purged": purged}
+        return {"raw_html_purged": purged, "expired_unresolved": expired}
 
     from pipeline.processing import health
     stage("recompute", lambda: cmd_recompute(argparse.Namespace()))
@@ -650,11 +691,37 @@ def cmd_daily(args) -> None:
 
     # The 'new == 0' canary above could never catch the throttle: collect kept producing
     # ~1,400 rows/day while over half of them were unresolved and therefore unfetchable.
-    # Judge the resolver on how much of the collection it loses. (31 Jul, fixed 1 Aug)
+    # Judge the resolver on how much of the collection it loses (31 Jul, fixed 1 Aug) —
+    # but since the nightly Mac-IP sweep (14 Aug), fail the run only when the aged
+    # backlog shows the recovery path failing; see resolver_canary.
     alarm = resolver_alarm((c_stats or {}).get("resolver")
                            if isinstance(c_stats, dict) else None)
+    aged_now = aged_prev = None
     if alarm:
-        canaries.append(alarm)
+        try:
+            with connect() as conn, conn.cursor() as cur:
+                cur.execute("""select count(*) from source_article
+                               where processing_status='new' and url like %s
+                                 and created_at < now() - interval '48 hours'""",
+                            ("%news.google.com%",))
+                aged_now = cur.fetchone()[0]
+                cur.execute("""select (stage_stats->'collect_backlog'
+                                       ->>'unresolved_aged_48h')::int
+                               from pipeline_run
+                               where finished_at is not null
+                                 and stage_stats ? 'collect_backlog'
+                               order by id desc limit 1""")
+                row = cur.fetchone()
+                aged_prev = row[0] if row else None
+        except Exception as e:                      # grace = trend unknown, not healthy
+            print(f"WARN resolver backlog reading failed: {e}")
+        stats["collect_backlog"] = {"unresolved_aged_48h": aged_now}
+        verdict = resolver_canary(alarm, aged_now, aged_prev)
+        if verdict:
+            canaries.append(verdict)
+        else:
+            stats["resolver_warning"] = alarm
+            print(f"WARNING (not run-fatal): {alarm}")
 
     p_stats = stats.get("process")
     if isinstance(p_stats, dict):
