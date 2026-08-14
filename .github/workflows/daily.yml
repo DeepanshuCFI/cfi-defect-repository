@@ -44,14 +44,20 @@ jobs:
           print(any(datetime.fromisoformat(r['run_started_at'].replace('Z','+00:00'))
                     .astimezone(ist).strftime('%Y-%m-%d') == '$TODAY_IST' for r in runs))")
           if [ "$OK" = "True" ] && [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "go=no" >> "$GITHUB_OUTPUT"
-            echo "A successful run already happened today (IST) — skipping."
+            # Today already succeeded, so the full pipeline is not needed — but the
+            # slot is free, so spend it on a retry-only sweep of unresolved Google
+            # News URLs (no LLM, no deploy). While Google hard-blocks GH runner IPs
+            # (observed 14 Aug 2026) this resolves ~0 in ~2 min; when they unblock,
+            # CI regains self-sufficiency with no code change. The Mac-IP nightly
+            # sweep (scheduled task defect-repo-url-sweep) is the primary drain.
+            echo "go=retry" >> "$GITHUB_OUTPUT"
+            echo "A successful run already happened today (IST) — retry-only mode."
           else
             echo "go=yes" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: actions/setup-python@v6
-        if: steps.guard.outputs.go == 'yes'
+        if: steps.guard.outputs.go != 'no'
         with:
           python-version: "3.12"
           cache: pip
@@ -80,7 +86,7 @@ jobs:
       # run into Google's throttle around 45% in and silently dropped the remaining
       # ~800-1300 articles/day (31 Jul 2026). Warm cache = calls only for new articles.
       - name: Restore Google News URL cache
-        if: steps.guard.outputs.go == 'yes'
+        if: steps.guard.outputs.go != 'no'
         uses: actions/cache/restore@v4
         with:
           path: data/gnews_url_cache.json
@@ -89,7 +95,7 @@ jobs:
             gnews-url-cache-
 
       - name: Install dependencies
-        if: steps.guard.outputs.go == 'yes'
+        if: steps.guard.outputs.go != 'no'
         run: pip install -r requirements.txt
 
       # Inference runs on the owner's Claude subscription, not the API. The token comes
@@ -184,6 +190,18 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: python -m pipeline.run daily --days 2
 
+      # Retry-only mode (go == 'retry'): today's full run already succeeded, so this
+      # slot only re-attempts unresolved Google News URLs. No LLM, no deploy, no
+      # heartbeat — the sweep either recovers rows into 'fetched' for tomorrow's run
+      # or exits quickly against the throttle. Its resolutions are banked by the
+      # cache save below either way.
+      - name: Retry-only sweep of unresolved URLs
+        if: steps.guard.outputs.go == 'retry'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONUNBUFFERED: "1"
+        run: python -m pipeline.run retry-unresolved --limit 1500
+
       # Saves must run even when the pipeline step failed — see the restore comment.
       # The run_id key is unique per run, so every save lands and the next restore's
       # prefix match picks up the newest one.
@@ -195,7 +213,7 @@ jobs:
           key: geocode-cache-${{ github.run_id }}
 
       - name: Save Google News URL cache
-        if: ${{ steps.guard.outputs.go == 'yes' && !cancelled() }}
+        if: ${{ steps.guard.outputs.go != 'no' && !cancelled() }}
         uses: actions/cache/save@v4
         with:
           path: data/gnews_url_cache.json
