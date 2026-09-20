@@ -1010,3 +1010,153 @@ def test_expired_status_is_in_the_migrated_vocabulary():
     latest = sorted(p for p in mig.glob("*.sql")
                     if "processing_status" in p.read_text())[-1]
     assert "'expired'" in latest.read_text()
+
+
+# ------------------------------------- health.py <-> stage_stats shape contract
+# The 21 Sep 2026 false alarm: health.extraction_alive read
+# stage_stats->'process'->>'extracted', but cmd_process returned None, so cmd_daily's
+# stage() recorded the string "done" — the counters had never existed in pipeline_run,
+# coalesce read 0, and the alert fired every day the queue was non-empty (which it
+# permanently is). Same species as the _MB_FIELDS drift test above: a reader and a
+# writer of one shape must not be able to drift apart silently.
+import argparse  # noqa: E402
+import ast  # noqa: E402
+import inspect  # noqa: E402
+import re  # noqa: E402
+import textwrap  # noqa: E402
+
+
+def _health_stage_stats_paths():
+    """(two_level, top_level) JSON paths health.py's SQL reads out of stage_stats."""
+    from pipeline.processing import health
+    src = inspect.getsource(health)
+    two = set(re.findall(r"stage_stats->'(\w+)'->>'(\w+)'", src))
+    top = set(re.findall(r"stage_stats->>'(\w+)'", src))
+    return two, top
+
+
+def _stats_literal_keys(fn) -> set:
+    """Keys of the `stats = {...}` literal inside fn — its shape without needing a DB."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "stats" for t in node.targets)
+                and isinstance(node.value, ast.Dict)):
+            return {k.value for k in node.value.keys if isinstance(k, ast.Constant)}
+    raise AssertionError(f"no literal `stats = {{...}}` found in {fn.__name__}")
+
+
+def _run_cmd_process_on_empty_queue(monkeypatch, tmp_path) -> dict:
+    """Really execute cmd_process: jsonl mode, empty queue, no DB, zero LLM calls."""
+    from pipeline import configload
+    from pipeline import db as db_mod
+    from pipeline import run as run_mod
+    from pipeline import store as store_mod
+
+    def _no_db():
+        raise RuntimeError("unit tests have no DB")
+
+    monkeypatch.setattr(store_mod, "ROOT", tmp_path)   # JsonlStore -> tmp, never data/
+    monkeypatch.setattr(db_mod, "connect", _no_db)     # reserve sizing takes its fallback
+    monkeypatch.setattr(configload, "_db_available", lambda: False)  # config from files
+    configload.settings.cache_clear()
+    configload.keywords.cache_clear()
+    try:
+        return run_mod.cmd_process(argparse.Namespace(limit=5, jsonl=True))
+    finally:                     # don't leak this test's cached config mode to others
+        configload.settings.cache_clear()
+        configload.keywords.cache_clear()
+
+
+def test_cmd_process_returns_the_counters_not_none(monkeypatch, tmp_path):
+    out = _run_cmd_process_on_empty_queue(monkeypatch, tmp_path)
+    assert isinstance(out, dict), "cmd_process must return its stats dict"
+    # stage() records `fn() or "done"` — a falsy return regresses to the string "done"
+    assert out, "an empty dict is falsy and would be recorded as 'done'"
+    for k in ("extracted", "extracted_light", "prefiltered", "irrelevant",
+              "skipped_pure_crash", "failed", "loaded", "stopped_reason"):
+        assert k in out, f"cmd_process stopped recording {k!r}"
+    assert out["loaded"] == 0
+    assert out["stopped_reason"] is None
+
+
+def test_health_process_paths_exist_in_what_cmd_process_returns(monkeypatch, tmp_path):
+    two, _ = _health_stage_stats_paths()
+    keys_read = {k for stage, k in two if stage == "process"}
+    assert keys_read, "regex found no ->'process'->> paths — did health.py change shape?"
+    out = _run_cmd_process_on_empty_queue(monkeypatch, tmp_path)
+    missing = keys_read - set(out)
+    assert not missing, f"health.py reads {missing} but cmd_process does not record them"
+    for k in keys_read:                       # health.py casts them with ::int
+        assert isinstance(out[k], int), f"{k!r} must stay an int for health.py's ::int"
+
+
+def test_health_auto_review_paths_exist_in_auto_review_stats():
+    two, _ = _health_stage_stats_paths()
+    keys_read = {k for stage, k in two if stage == "auto_review"}
+    assert keys_read, "regex found no ->'auto_review'->> paths — health.py changed shape?"
+    from pipeline.processing import auto_review as ar
+    missing = keys_read - _stats_literal_keys(ar.run)
+    assert not missing, f"health.py reads {missing} but auto_review.run does not count them"
+
+
+def test_health_paths_point_at_stages_and_keys_cmd_daily_records():
+    from pipeline import run as run_mod
+    two, top = _health_stage_stats_paths()
+    tree = ast.parse(textwrap.dedent(inspect.getsource(run_mod.cmd_daily)))
+    staged = {c.args[0].value for c in ast.walk(tree)
+              if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+              and c.func.id == "stage" and c.args and isinstance(c.args[0], ast.Constant)}
+    assert staged, "found no stage(...) registrations in cmd_daily"
+    unknown = {s for s, _ in two} - staged
+    assert not unknown, f"health.py reads stage_stats->{unknown} but cmd_daily never runs them"
+    # each stage health reads must have its shape pinned by a test in this section;
+    # a new one would be exactly how the "done" false alarm shipped the first time
+    covered = {"process", "auto_review"}
+    uncovered = {s for s, _ in two} - covered
+    assert not uncovered, (f"health.py now reads stage_stats->{uncovered} — add a shape "
+                           "test for it here before shipping")
+    # top-level paths (llm_spend_usd) are assigned directly on cmd_daily's stats dict
+    assigned = {n.slice.value for n in ast.walk(tree)
+                if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name)
+                and n.value.id == "stats" and isinstance(n.slice, ast.Constant)}
+    missing = top - assigned
+    assert not missing, f"health.py reads top-level {missing} but cmd_daily never assigns them"
+
+
+# ------------------------------------------------------------- process canary
+# Dead until 21 Sep 2026 for the same reason as extraction_alive: it gated on
+# isinstance(p_stats, dict) and p_stats was always the string "done".
+from pipeline.run import process_canary  # noqa: E402
+
+
+def test_process_canary_fires_when_loaded_articles_go_unhandled():
+    msg = process_canary({"loaded": 40, "extracted": 0, "extracted_light": 0,
+                          "irrelevant": 0, "prefiltered": 0}, budget_stopped=False)
+    assert msg and "handled 0" in msg
+
+
+def test_process_canary_stays_quiet_on_an_empty_queue():
+    # an empty queue is a quiet day, not a failure (extraction_alive's fetched==0 rule)
+    assert process_canary({"loaded": 0, "extracted": 0, "extracted_light": 0,
+                           "irrelevant": 0, "prefiltered": 0},
+                          budget_stopped=False) is None
+
+
+def test_process_canary_stays_quiet_when_the_budget_stopped_the_run():
+    assert process_canary({"loaded": 40, "extracted": 0, "extracted_light": 0,
+                           "irrelevant": 0, "prefiltered": 0},
+                          budget_stopped=True) is None
+
+
+def test_process_canary_stays_quiet_when_work_happened():
+    assert process_canary({"loaded": 40, "extracted": 3, "extracted_light": 10,
+                           "irrelevant": 5, "prefiltered": 2},
+                          budget_stopped=False) is None
+
+
+def test_process_canary_tolerates_the_legacy_done_string():
+    # pre-fix pipeline_run rows hold "done"; the canary must not crash on them
+    assert process_canary("done", budget_stopped=False) is None
+    assert process_canary("FAILED", budget_stopped=False) is None
+    assert process_canary(None, budget_stopped=False) is None
