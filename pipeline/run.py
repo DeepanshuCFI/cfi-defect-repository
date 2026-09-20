@@ -84,6 +84,26 @@ def resolver_canary(share_alarm: str | None, aged_now: int | None,
             f"{aged_prev} -> {aged_now}: the retry path is not keeping up")
 
 
+def process_canary(p_stats, budget_stopped: bool) -> str | None:
+    """Whether the process stage silently did nothing, which should FAIL the run.
+
+    Reads the counters cmd_process RETURNS — until 21 Sep 2026 it returned None,
+    cmd_daily's stage() recorded the string "done" instead, and the isinstance
+    gate meant this canary had been dead since it was written (the same gap made
+    health.extraction_alive alert daily on a coalesced 0). loaded > 0: an empty
+    queue is a quiet day, not a failure — extraction_alive's fetched==0 guard,
+    mirrored. (Pure for testability.)
+    """
+    if not isinstance(p_stats, dict):
+        return None
+    did_work = (p_stats.get("extracted", 0) + p_stats.get("extracted_light", 0)
+                + p_stats.get("irrelevant", 0) + p_stats.get("prefiltered", 0))
+    if did_work == 0 and p_stats.get("loaded", 0) > 0 and not budget_stopped:
+        return ("process loaded articles but handled 0 with budget remaining "
+                "(relevance/extraction is broken?)")
+    return None
+
+
 def tier_for(domain: str | None) -> str:
     if not domain:
         return "aggregator"
@@ -293,8 +313,14 @@ def _raise_if_credential_error(e: Exception) -> None:
         raise ApiCredentialError(f"HTTP {e.status_code}: {str(e)[:200]}") from e
 
 
-def cmd_process(args) -> None:
-    """Phase 3: fetched -> relevance -> extraction -> incident."""
+def cmd_process(args) -> dict:
+    """Phase 3: fetched -> relevance -> extraction -> incident.
+
+    Must return the counters dict: cmd_daily's stage() records it in
+    pipeline_run.stage_stats->'process', where health.extraction_alive and the
+    did-work canary read it. Returning None stores the string "done" instead —
+    both checks then coalesce to 0 and extraction_alive cries wolf every day
+    the queue is non-empty (fired daily until fixed, 21 Sep 2026)."""
     from pipeline import configload
     from pipeline.processing import extract as ex
     from pipeline.processing import prefilter
@@ -319,6 +345,7 @@ def cmd_process(args) -> None:
               f"({n_priority} defect-vocabulary, first in line)…")
         stats = {"prefiltered": 0, "irrelevant": 0, "extracted": 0, "extracted_light": 0,
                  "skipped_pure_crash": 0, "failed": 0, "snippets_dropped": 0}
+        stopped_reason = None                 # why the loop broke early, if it did
         from pipeline import llmcost
         # Extraction may spend only its SHARE of the daily budget; the rest is reserved
         # for adjudication (which gates publication) — without a reserve, extraction ate
@@ -353,6 +380,7 @@ def cmd_process(args) -> None:
                 print(f"  EXTRACTION BUDGET STOP: ${llmcost.spent():.2f} >= "
                       f"${llmcost.budget() * ext_share:.2f} (adjudication reserve kept) — "
                       f"{len(arts) - n_done} article(s) stay queued for tomorrow")
+                stopped_reason = "extraction_budget"
                 break
             text = a.get("clean_text") or ""
             if not text.strip():
@@ -371,6 +399,7 @@ def cmd_process(args) -> None:
                 if _api_limit_hit(e):
                     print("  API MONTHLY LIMIT hit — stopping; queue waits for tomorrow")
                     stats["api_limit_hit"] = True
+                    stopped_reason = "api_monthly_limit"
                     break
                 print(f"  WARN relevance failed #{a['id']}: {e}")
                 stats["failed"] += 1
@@ -397,6 +426,7 @@ def cmd_process(args) -> None:
                 if _api_limit_hit(e):
                     print("  API MONTHLY LIMIT hit — stopping; queue waits for tomorrow")
                     stats["api_limit_hit"] = True
+                    stopped_reason = "api_monthly_limit"
                     break
                 print(f"  WARN extraction failed #{a['id']}: {e}")
                 store.set_article_status(a["id"], "failed")
@@ -431,6 +461,10 @@ def cmd_process(args) -> None:
             print(f"      loc: {inc.get('location_text_best','')[:90]}")
         print(f"\nDONE {stats} · llm spend so far ${llmcost.spent():.2f}"
               f" (budget ${llmcost.budget():.2f})")
+        # attached after the DONE line so the CLI's printed stats stay as they were
+        stats["loaded"] = len(arts)
+        stats["stopped_reason"] = stopped_reason
+        return stats
     finally:
         store.close()
 
@@ -725,12 +759,10 @@ def cmd_daily(args) -> None:
 
     p_stats = stats.get("process")
     if isinstance(p_stats, dict):
-        did_work = (p_stats.get("extracted", 0) + p_stats.get("extracted_light", 0)
-                    + p_stats.get("irrelevant", 0) + p_stats.get("prefiltered", 0))
-        budget_stopped = llmcost.over(0.9) or p_stats.get("api_limit_hit")
-        if did_work == 0 and not budget_stopped:
-            canaries.append("process handled 0 articles with budget remaining "
-                            "(queue empty, or extraction is broken)")
+        budget_stopped = llmcost.over(0.9) or bool(p_stats.get("api_limit_hit"))
+        p_verdict = process_canary(p_stats, budget_stopped)
+        if p_verdict:
+            canaries.append(p_verdict)
         if p_stats.get("api_limit_hit"):
             canaries.append("Anthropic monthly spend limit was hit — raise the console "
                             "limit or the pipeline stalls until month end")
