@@ -27,6 +27,16 @@ INCIDENT_FIELDS = ["crash_date", "crash_time", "location_text_raw", "location_te
 _NULLISH = {"null", "none", "nil", "na", "n/a", ""}
 
 
+# The Google News redirector marker. Centralised because the SAME predicate was
+# hand-copied into five places (three here, two in run.py's hygiene stage), and every
+# copy was an implicit "…and therefore not yet fetched" assumption. When cmd_collect
+# began parking fetched-but-textless rows at 'new' under a RESOLVED publisher URL, all
+# five filters silently stopped matching them: no fetch, no retry, no TTL, invisible in
+# health. 4,512 rows leaked between 4 Jul and 21 Sep 2026. One name, one meaning.
+GNEWS_HOST = "news.google.com"
+GNEWS_LIKE = f"%{GNEWS_HOST}%"
+
+
 def _clean_nullish(v):
     """Model outputs sometimes carry the STRING 'null' instead of JSON null — a literal
     'null' in an integer column killed daily run #9 (2026-07-10). Normalise to None."""
@@ -182,7 +192,7 @@ class DBStore:
                 """select id, url, state, district, language
                    from source_article
                    where processing_status = 'new' and url like %s
-                   order by id desc limit %s""", ("%news.google.com%", limit))
+                   order by id desc limit %s""", (GNEWS_LIKE, limit))
             cols = [d.name for d in cur.description]
             return [dict(zip(cols, r)) for r in cur.fetchall()]
 
@@ -195,7 +205,7 @@ class DBStore:
             cur.execute("""update source_article set processing_status='expired'
                            where processing_status='new' and url like %s
                              and created_at < now() - make_interval(days => %s)""",
-                        ("%news.google.com%", days))
+                        (GNEWS_LIKE, days))
             return cur.rowcount
 
     def aged_unresolved_count(self, hours: int = 48) -> int:
@@ -207,8 +217,50 @@ class DBStore:
             cur.execute("""select count(*) from source_article
                            where processing_status='new' and url like %s
                              and created_at < now() - make_interval(hours => %s)""",
-                        ("%news.google.com%", hours))
+                        (GNEWS_LIKE, hours))
             return cur.fetchone()[0]
+
+    def stranded_articles(self, limit: int = 200) -> list[dict]:
+        """'new' rows holding a REAL publisher URL — the mirror image of
+        unresolved_articles. cmd_collect resolved the Google link, fetched the page, got
+        no clean_text, and wrote the resolved URL back with status 'new' (run.py, the
+        `"fetched" if f.clean_text else …` branch). Because every other 'new' consumer
+        filters for the redirector, these had no fetch stage, no retry and no TTL.
+
+        Newest first: publisher URLs rot (the dominant failure is an outlet that has
+        since 404'd or moved the slug), so a recent row is likeliest to recover."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """select id, url, state, district, language
+                   from source_article
+                   where processing_status = 'new' and url not like %s
+                   order by id desc limit %s""", (GNEWS_LIKE, limit))
+            cols = [d.name for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    def stranded_new_count(self) -> int:
+        """Size of the real-URL 'new' class on its own. health.py counted all 'new'
+        together against a 15,000 alert, so 4,512 stranded rows stayed invisible behind
+        a Google backlog that had already drained to zero."""
+        with self.conn.cursor() as cur:
+            cur.execute("""select count(*) from source_article
+                           where processing_status='new' and url not like %s""",
+                        (GNEWS_LIKE,))
+            return cur.fetchone()[0]
+
+    def expire_stale_stranded(self, days: int = 30) -> int:
+        """TTL backstop for real-URL 'new' rows. retry-stranded gives every row a
+        terminal status on its first pass, so this only catches rows that kept raising
+        on fetch (network/TLS) and would otherwise sit at 'new' forever. 'expired' and
+        'failed' are both already in the processing_status vocabulary (migration 014),
+        so this adds no term and needs no migration — the store.py same-commit rule is
+        satisfied by not widening the CHECK at all."""
+        with self.conn.cursor() as cur:
+            cur.execute("""update source_article set processing_status='expired'
+                           where processing_status='new' and url not like %s
+                             and created_at < now() - make_interval(days => %s)""",
+                        (GNEWS_LIKE, days))
+            return cur.rowcount
 
     def update_article_fetch(self, article_id, url: str, clean_text: str,
                              dedup_hash: str, published_at, status: str) -> None:
@@ -377,7 +429,7 @@ class JsonlStore:
     def unresolved_articles(self, limit: int = 200) -> list[dict]:
         out = [dict(r) for r in self._rows
                if r.get("processing_status") == "new"
-               and "news.google.com" in (r.get("url") or "")]
+               and GNEWS_HOST in (r.get("url") or "")]
         return out[::-1][:limit]                       # newest first, as in DBStore
 
     def expire_stale_unresolved(self, days: int = 30) -> int:
@@ -386,7 +438,7 @@ class JsonlStore:
         for r in self._rows:
             ts = r.get("created_at") or r.get("fetched_at")
             if (r.get("processing_status") == "new"
-                    and "news.google.com" in (r.get("url") or "")
+                    and GNEWS_HOST in (r.get("url") or "")
                     and ts and datetime.fromisoformat(ts) < cutoff):
                 r["processing_status"] = "expired"
                 n += 1
@@ -398,9 +450,34 @@ class JsonlStore:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         return sum(1 for r in self._rows
                    if r.get("processing_status") == "new"
-                   and "news.google.com" in (r.get("url") or "")
+                   and GNEWS_HOST in (r.get("url") or "")
                    and (r.get("created_at") or "")
                    and datetime.fromisoformat(r["created_at"]) < cutoff)
+
+    def stranded_articles(self, limit: int = 200) -> list[dict]:
+        out = [dict(r) for r in self._rows
+               if r.get("processing_status") == "new"
+               and GNEWS_HOST not in (r.get("url") or "")]
+        return out[::-1][:limit]                       # newest first, as in DBStore
+
+    def stranded_new_count(self) -> int:
+        return sum(1 for r in self._rows
+                   if r.get("processing_status") == "new"
+                   and GNEWS_HOST not in (r.get("url") or ""))
+
+    def expire_stale_stranded(self, days: int = 30) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        n = 0
+        for r in self._rows:
+            ts = r.get("created_at") or r.get("fetched_at")
+            if (r.get("processing_status") == "new"
+                    and GNEWS_HOST not in (r.get("url") or "")
+                    and ts and datetime.fromisoformat(ts) < cutoff):
+                r["processing_status"] = "expired"
+                n += 1
+        if n:
+            self._flush()
+        return n
 
     def update_article_fetch(self, article_id, url: str, clean_text: str,
                              dedup_hash: str, published_at, status: str) -> None:

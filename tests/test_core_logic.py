@@ -1173,3 +1173,112 @@ def test_process_canary_tolerates_the_legacy_done_string():
     assert process_canary("done", budget_stopped=False) is None
     assert process_canary("FAILED", budget_stopped=False) is None
     assert process_canary(None, budget_stopped=False) is None
+
+
+# ------------------------------- stranded real-URL 'new' rows (21 Sep 2026)
+# cmd_collect wrote processing_status='new' alongside the RESOLVED publisher URL when a
+# page fetched but yielded no clean_text. Every 'new' consumer filters FOR the Google
+# redirector, so those rows had no fetch, no retry, no TTL and no health visibility:
+# 4,512 leaked between 4 Jul and 21 Sep 2026 at ~72/day. These tests pin the two halves
+# of the fix — collect must not mint the state, and the new queue must see it.
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from pathlib import Path as pathlib_Path  # noqa: E402
+from pipeline.store import GNEWS_HOST, GNEWS_LIKE, JsonlStore  # noqa: E402,F811
+
+PUB = "https://www.bhaskar.com/local/bihar/patna/video/patna-crash-1387.html"
+
+
+def _pile(*rows):
+    """JsonlStore over (status, url, created_at) triples. The TTL calls _flush(), so
+    this needs a real (throwaway) path — the rows themselves stay in memory."""
+    import tempfile
+    s = object.__new__(JsonlStore)
+    s.path = pathlib_Path(tempfile.mkdtemp()) / "articles.jsonl"
+    s._rows = [{"id": i, "processing_status": st, "url": u, "created_at": ts}
+               for i, (st, u, ts) in enumerate(rows)]
+    return s
+
+
+def _ts(days_ago):
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+
+
+def test_stranded_queue_sees_real_url_new_rows():
+    q = _pile(("new", PUB, _ts(1)))
+    assert [a["id"] for a in q.stranded_articles()] == [0]
+
+
+def test_stranded_queue_ignores_google_rows():
+    """Negative control: the Google backlog belongs to unresolved_articles. If this
+    queue also claimed it, both stages would fight over the same rows."""
+    q = _pile(("new", GURL.format("aaaa"), _ts(1)))
+    assert q.stranded_articles() == []
+    assert [a["id"] for a in q.unresolved_articles()] == [0]
+
+
+def test_the_two_new_queues_partition_the_status():
+    """Together they must cover ALL of 'new' — the leak was a gap between them."""
+    q = _pile(("new", PUB, _ts(1)), ("new", GURL.format("bb"), _ts(1)),
+              ("fetched", PUB + "?x", _ts(1)))
+    seen = {a["id"] for a in q.stranded_articles()} | \
+           {a["id"] for a in q.unresolved_articles()}
+    all_new = {r["id"] for r in q._rows if r["processing_status"] == "new"}
+    assert seen == all_new, "a 'new' row belongs to neither queue — that IS the bug"
+
+
+def test_stranded_queue_ignores_terminal_rows():
+    q = _pile(("failed", PUB, _ts(1)), ("expired", PUB + "?a", _ts(1)),
+              ("near_duplicate", PUB + "?b", _ts(1)))
+    assert q.stranded_articles() == []
+
+
+def test_stranded_ttl_expires_only_old_real_url_rows():
+    q = _pile(("new", PUB, _ts(40)),                     # old real URL -> expired
+              ("new", PUB + "?a", _ts(2)),               # recent -> left for the retry
+              ("new", GURL.format("cc"), _ts(40)))       # google -> the OTHER TTL's job
+    assert q.expire_stale_stranded(days=30) == 1
+    assert [r["processing_status"] for r in q._rows] == ["expired", "new", "new"]
+
+
+def test_stranded_count_is_separable_from_the_google_backlog():
+    """health.py counted all 'new' in one bucket against a 15,000 alert, so 4,512
+    stranded rows stayed invisible behind a Google pile that had drained to zero."""
+    q = _pile(*([("new", GURL.format(f"g{i}"), _ts(1)) for i in range(9)]
+                + [("new", PUB, _ts(1))]))
+    assert q.stranded_new_count() == 1
+    assert len(q.unresolved_articles()) == 9
+
+
+def test_collect_retires_a_textless_fetch_instead_of_parking_it_at_new():
+    """The leak itself, at its source. A fetch that came back empty must not be left
+    claiming it was never fetched — 'new' under a resolved URL is unreachable."""
+    import inspect
+    from pipeline import run as run_mod
+    src = inspect.getsource(run_mod.collect_district)
+    assert 'else "failed"' in src or 'if f.clean_text else "failed"' in src, \
+        "collect_district no longer retires a textless fetch terminally"
+    assert 'if f.clean_text else "new"' not in src, \
+        "collect_district still parks a fetched-but-textless row at 'new'"
+
+
+def test_stranded_terminal_statuses_need_no_new_vocabulary():
+    """'failed' and 'expired' are both already declared, so this fix widens no CHECK
+    and owes no migration — the store.py same-commit rule is met by adding no term."""
+    import pathlib
+    mig = pathlib.Path(__file__).resolve().parent.parent / "migrations"
+    latest = sorted(p for p in mig.glob("*.sql")
+                    if "processing_status" in p.read_text())[-1].read_text()
+    for term in ("'failed'", "'expired'"):
+        assert term in latest, f"{term} is written by the stranded fix but not declared"
+
+
+def test_redirector_predicate_is_not_hand_copied_again():
+    """Five divergent copies of this predicate are what let the leak hide. New code
+    must use the shared constant."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    for mod in ("pipeline/store.py", "pipeline/run.py", "pipeline/processing/health.py"):
+        txt = (root / mod).read_text()
+        literals = txt.count('"%news.google.com%"') + txt.count("'%news.google.com%'")
+        assert literals == 0, f"{mod} hand-copies the redirector pattern; use GNEWS_LIKE"
+    assert GNEWS_LIKE == f"%{GNEWS_HOST}%"
