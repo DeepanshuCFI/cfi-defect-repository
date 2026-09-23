@@ -18,7 +18,7 @@ from pipeline import configload                       # noqa: E402
 from pipeline.collectors import gdelt as gdelt_mod    # noqa: E402
 from pipeline.collectors import rss                   # noqa: E402
 from pipeline.fetch import fetch_article              # noqa: E402
-from pipeline.store import get_store                  # noqa: E402
+from pipeline.store import GNEWS_LIKE, get_store      # noqa: E402
 
 
 # Share of collected feed items that may end a run without a usable publisher URL before
@@ -162,7 +162,19 @@ def collect_district(d: dict, store, args) -> dict:
                         row["processing_status"] = "near_duplicate"
                         stats["near_dup"] += 1
                     else:
-                        row["processing_status"] = "fetched" if f.clean_text else "new"
+                        # 'new' means "not fetched yet". This row HAS been fetched — the
+                        # Google link resolved and the page came back — so parking it at
+                        # 'new' made it a lie, and one nothing could see: row.update()
+                        # below replaces the redirector with the resolved publisher URL,
+                        # and every 'new' consumer filters FOR the redirector. No fetch,
+                        # no retry, no TTL, and health.py counted it in the same bucket
+                        # as the Google backlog. 4,512 rows leaked 4 Jul-21 Sep 2026,
+                        # ~72/day, 69% of them video pages that serve HTTP 200 with no
+                        # article body. 'failed' is terminal and already in the
+                        # vocabulary, and is exactly what cmd_retry_stranded and
+                        # cmd_retry_unresolved do with the identical no-text case.
+                        row["processing_status"] = (
+                            "fetched" if f.clean_text else "failed")
                     # raw_html is NEVER stored: nothing in the pipeline reads it back
                     # (extraction/review/watch all use clean_text), and hoarding it blew
                     # the DB to 1.5GB and a disk-full outage (18 Jul). URLs allow
@@ -283,6 +295,71 @@ def cmd_retry_unresolved(args) -> dict:
                                        f.published_at, status)
         rss.save_cache()
         print(f"DONE {stats} · resolver {rss.STATS}")
+        return stats
+    finally:
+        store.close()
+
+
+def cmd_retry_stranded(args) -> dict:
+    """Give real-URL 'new' rows a fetch retry, then a terminal status either way.
+
+    These are articles cmd_collect resolved and fetched but got no clean_text from, and
+    left at 'new' under the resolved publisher URL (see the comment in collect_district).
+    unresolved_articles/expire_stale_unresolved/aged_unresolved_count all filter FOR the
+    Google redirector, so nothing ever touched them again.
+
+    Every row gets a terminal status on its first pass here — 'fetched' when text now
+    comes back, 'failed' when it does not. That is deliberately self-cleaning: the
+    dominant cohort (bhaskar.com /video/ pages, 64% of the pile) returns HTTP 200 with an
+    empty body forever, so a domain blocklist would be both brittle and unnecessary —
+    one pass retires them and the queue never offers them again. Costs no LLM budget.
+
+    Measured on the live pile 21 Sep 2026: 22% of a random 40 recovered text (83% of the
+    non-video remainder), which is ~1,100 articles of real signal — from the vernacular
+    long tail (indiatv, deshajtimes, bhaskardigital, thenewsmill, ~170 outlets), NOT from
+    bhaskar, whose stranded rows are 0-for-41 because the pages hold no article at all."""
+    store = get_store(force_jsonl=args.jsonl)
+    ham_max = configload.settings().get("dedup", {}).get("simhash_hamming_max", 3)
+    stats = {"tried": 0, "fetched": 0, "near_dup": 0, "no_text": 0, "robots": 0,
+             "errors": 0}
+    try:
+        rows = store.stranded_articles(limit=args.limit)
+        kind = "would retry" if args.dry_run else "retrying"
+        print(f"{kind} {len(rows)} stranded article(s) (real publisher URL, 'new')…")
+        for a in rows:
+            stats["tried"] += 1
+            try:
+                f = fetch_article(a["url"], delay_s=args.delay)
+            except Exception as e:
+                # left at 'new' on purpose: a transport error is not evidence about the
+                # page. expire_stale_stranded is the backstop if it never recovers.
+                print(f"  WARN fetch failed {a['url'][:60]}: {e}")
+                stats["errors"] += 1
+                continue
+            if f.blocked_by_robots:
+                stats["robots"] += 1
+                if not args.dry_run:
+                    store.set_article_status(a["id"], "failed")
+                continue
+            if not f.clean_text:
+                stats["no_text"] += 1
+                if not args.dry_run:
+                    store.set_article_status(a["id"], "failed")
+                continue
+            status = "fetched"
+            if store.near_duplicate(f.dedup_hash, district=a.get("district"),
+                                    state=a.get("state"), hamming_max=ham_max):
+                status = "near_duplicate"
+                stats["near_dup"] += 1
+            else:
+                stats["fetched"] += 1
+            if not args.dry_run:
+                store.update_article_fetch(a["id"], f.url, f.clean_text, f.dedup_hash,
+                                           f.published_at, status)
+        if args.dry_run:
+            print(f"DRY RUN — nothing written. {stats}")
+        else:
+            print(f"DONE {stats}")
         return stats
     finally:
         store.close()
@@ -686,6 +763,12 @@ def cmd_daily(args) -> None:
     # process so anything recovered is extractable in the same run. Costs no LLM budget.
     stage("retry_unresolved", lambda: cmd_retry_unresolved(argparse.Namespace(
         limit=300, delay=2.0, jsonl=False)))
+    # Same slot, the other half of the 'new' class: rows already fetched once that
+    # yielded no text. Every row it touches becomes terminal, so this drains rather
+    # than churns — 300/run against ~72/day of accrual clears the 4,512-row backlog
+    # in ~3 weeks and then idles at the arrival rate. No LLM budget.
+    stage("retry_stranded", lambda: cmd_retry_stranded(argparse.Namespace(
+        limit=300, delay=2.0, jsonl=False, dry_run=False)))
     stage("process", lambda: cmd_process(argparse.Namespace(limit=1000, jsonl=False)))
     stage("geocode", lambda: cmd_geocode(argparse.Namespace(limit=1000, jsonl=False)))
     stage("watch", _watch)
@@ -705,14 +788,24 @@ def cmd_daily(args) -> None:
             cur.execute("""update source_article set processing_status='expired'
                            where processing_status='new' and url like %s
                              and created_at < now() - interval '30 days'""",
-                        ("%news.google.com%",))
+                        (GNEWS_LIKE,))
             expired = cur.rowcount
+            # Same TTL for real-URL 'new' rows. retry_stranded terminalises on first
+            # pass, so this only sweeps rows that kept RAISING on fetch. Adds no new
+            # vocabulary term ('expired' is already in migration 014), so there is no
+            # CHECK to widen and no migration owed.
+            cur.execute("""update source_article set processing_status='expired'
+                           where processing_status='new' and url not like %s
+                             and created_at < now() - interval '30 days'""",
+                        (GNEWS_LIKE,))
+            expired_stranded = cur.rowcount
             conn.commit()
         vc = connect()
         vc.autocommit = True
         vc.execute("vacuum source_article")
         vc.close()
-        return {"raw_html_purged": purged, "expired_unresolved": expired}
+        return {"raw_html_purged": purged, "expired_unresolved": expired,
+                "expired_stranded": expired_stranded}
 
     from pipeline.processing import health
     stage("recompute", lambda: cmd_recompute(argparse.Namespace()))
@@ -744,7 +837,7 @@ def cmd_daily(args) -> None:
                 cur.execute("""select count(*) from source_article
                                where processing_status='new' and url like %s
                                  and created_at < now() - interval '48 hours'""",
-                            ("%news.google.com%",))
+                            (GNEWS_LIKE,))
                 aged_now = cur.fetchone()[0]
                 cur.execute("""select (stage_stats->'collect_backlog'
                                        ->>'unresolved_aged_48h')::int
@@ -814,6 +907,16 @@ def main() -> None:
     ru.add_argument("--delay", type=float, default=2.0, help="per-domain delay (s)")
     ru.add_argument("--jsonl", action="store_true", help="force file storage (no DB)")
     ru.set_defaults(func=cmd_retry_unresolved)
+
+    rs = sub.add_parser("retry-stranded",
+                        help="re-fetch 'new' rows that already hold a real publisher "
+                             "URL, then retire them terminally either way")
+    rs.add_argument("--limit", type=int, default=300)
+    rs.add_argument("--delay", type=float, default=2.0)
+    rs.add_argument("--dry-run", action="store_true",
+                    help="report what would happen; write nothing")
+    rs.add_argument("--jsonl", action="store_true")
+    rs.set_defaults(func=cmd_retry_stranded)
 
     pr = sub.add_parser("process", help="Phase 3: relevance + extraction")
     pr.add_argument("--limit", type=int, default=50)

@@ -13,11 +13,18 @@ import httpx
 
 from pipeline import configload
 from pipeline.db import connect
+from pipeline.store import GNEWS_LIKE
 
 DEFAULTS = {
     "db_size_alert_mb": 400,          # free limit was 500; Pro is 8GB but drift is drift
     "queue_depth_alert": 4000,        # 'fetched' backlog diverging = budget too low
     "new_stuck_alert": 15000,         # unresolvable 'new' articles piling up
+    # Real-URL 'new' rows: fetched once, no text, then stranded. Its own threshold
+    # because it hid inside new_stuck for 11 weeks — 4,512 rows sat far below the
+    # 15,000 alert while the Google backlog they shared a bucket with drained to 0.
+    # retry_stranded terminalises 300/run, so a sustained figure here means that
+    # stage is failing, not that intake is high.
+    "stranded_new_alert": 1500,
     "min_extracted_last_run": 1,      # 0 extractions = budget/API/collect silently dead
     "min_published_total_growth": 0,  # reserved for future use
 }
@@ -39,14 +46,21 @@ def collect_checks() -> list[tuple[str, bool, str]]:
 
         cur.execute("""select
              count(*) filter (where processing_status = 'fetched'),
-             count(*) filter (where processing_status = 'new')
-             from source_article""")
-        fetched, new = cur.fetchone()
+             count(*) filter (where processing_status = 'new'),
+             count(*) filter (where processing_status = 'new'
+                              and url not like %s)
+             from source_article""", (GNEWS_LIKE,))
+        fetched, new, stranded = cur.fetchone()
         out.append(("queue_depth", fetched < cfg["queue_depth_alert"],
                     f"extraction queue {fetched} (alert at {cfg['queue_depth_alert']}; "
                     "diverging queue means the daily budget can't keep up)"))
         out.append(("new_stuck", new < cfg["new_stuck_alert"],
-                    f"unprocessed 'new' articles {new} (alert at {cfg['new_stuck_alert']})"))
+                    f"unprocessed 'new' articles {new} (alert at {cfg['new_stuck_alert']}; "
+                    f"{new - stranded} awaiting URL resolution, {stranded} stranded)"))
+        out.append(("stranded_new", stranded < cfg["stranded_new_alert"],
+                    f"fetched-but-textless 'new' articles {stranded} "
+                    f"(alert at {cfg['stranded_new_alert']}; retry_stranded should be "
+                    "draining these to a terminal status)"))
 
         cur.execute("""select coalesce((stage_stats->'auto_review'->>'auto_published')::int, 0),
                               coalesce((stage_stats->>'llm_spend_usd')::numeric, 0),
