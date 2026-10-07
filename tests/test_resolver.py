@@ -138,3 +138,72 @@ def test_googlenewsdecoder_has_an_upper_bound():
     assert r.specifier.contains("0.2.1")       # the shape this branch was verified against
     assert not r.specifier.contains("0.3.0"), \
         "a new minor already renamed the result key once (0.2.1, 20 Sep 2026)"
+
+
+# ------------------------------------------------------------ decode wall-clock bound
+def test_a_stalled_decoder_connection_cannot_hang_resolve_url(clean_resolver, monkeypatch):
+    """7 Oct 2026: googlenewsdecoder 0.1.7 (the Mac's version) calls `requests` with no
+    timeout, so one Google connection that stopped answering froze the nightly sweep's
+    process in an SSL read for 3h09m — and almost certainly the 27–30 Aug sweep for three
+    days. resolve_url must bound every decode by wall-clock no matter which decoder
+    version is installed. The fake decoder below does what 0.1.7 does: a plain urllib GET
+    with no timeout, against a local socket that accepts and then never answers."""
+    import socket
+    import threading
+    import urllib.request
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    accepted: list = []
+
+    def tarpit():                       # accept, then say nothing, forever
+        conn, _ = srv.accept()
+        accepted.append(conn)
+
+    threading.Thread(target=tarpit, daemon=True).start()
+
+    def fake_gnewsdecoder(url, interval=1):
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/batchexecute")   # hangs without a timeout
+        return {"status": True, "decoded_url": "https://never.example/"}
+
+    mod = types.ModuleType("googlenewsdecoder")
+    mod.gnewsdecoder = fake_gnewsdecoder
+    monkeypatch.setitem(sys.modules, "googlenewsdecoder", mod)
+    monkeypatch.setattr(rss, "DECODE_TIMEOUT_S", 1.0, raising=False)
+
+    result: list = []
+    worker = threading.Thread(target=lambda: result.append(rss.resolve_url(GURL.format(n=9))),
+                              daemon=True)
+    worker.start()
+    worker.join(timeout=8)
+    try:
+        assert not worker.is_alive(), "resolve_url is still blocked on a silent connection"
+        assert result == [(GURL.format(n=9), False)]
+        assert rss.STATS["failed"] == 1
+        assert "timed out" in rss.STATS.get("last_error", "").lower()
+    finally:
+        for c in accepted:
+            c.close()
+        srv.close()
+
+
+def test_decode_timeout_is_scoped_to_the_call(clean_resolver, monkeypatch):
+    """The bound must not leak: the process-wide socket default is restored after each
+    decode, so DB and fetch sockets created later keep their own settings."""
+    import socket
+    monkeypatch.setattr(rss, "DECODE_TIMEOUT_S", 7.0, raising=False)
+    seen: list = []
+
+    def fake_gnewsdecoder(url, interval=1):
+        seen.append(socket.getdefaulttimeout())
+        return {"success": True, "decoded_url": PUB.format(n=5)}
+
+    mod = types.ModuleType("googlenewsdecoder")
+    mod.gnewsdecoder = fake_gnewsdecoder
+    monkeypatch.setitem(sys.modules, "googlenewsdecoder", mod)
+    before = socket.getdefaulttimeout()
+    assert rss.resolve_url(GURL.format(n=5)) == (PUB.format(n=5), True)
+    assert seen == [7.0]                       # in force during the decode …
+    assert socket.getdefaulttimeout() == before   # … and gone afterwards

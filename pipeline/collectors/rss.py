@@ -11,6 +11,7 @@ links keep the google URL and are flagged so fetch can retry later.
 import base64
 import json
 import re
+import socket
 import urllib.parse
 from dataclasses import dataclass
 
@@ -98,6 +99,7 @@ CACHE_PATH = ROOT / "data" / "gnews_url_cache.json"
 CACHE_MAX = 100_000          # Google News `when:Nd` bounds the working set to ~a week
 SAVE_EVERY = 50
 FAILURE_STREAK_TRIP = 25     # consecutive failures before we stop asking for this run
+DECODE_TIMEOUT_S = 30.0      # wall-clock bound per socket operation inside a decode
 
 STATS = {"hit_disk": 0, "hit_mem": 0, "decoded_b64": 0, "ok": 0,
          "failed": 0, "skipped_throttled": 0}
@@ -174,7 +176,19 @@ def resolve_url(google_url: str, client: httpx.Client | None = None) -> tuple[st
     out = (google_url, False)
     try:
         from googlenewsdecoder import gnewsdecoder
-        r = gnewsdecoder(google_url, interval=1)
+        # googlenewsdecoder 0.1.7 makes every `requests` call with NO timeout, so a single
+        # Google connection that stops answering blocks the process for good: on 7 Oct 2026
+        # a drain sat 3h09m in one SSL read, and the 27-30 Aug nightly sweep ran three days
+        # for the same reason. 0.2.1 has its own 10 s httpx timeout. Setting the socket
+        # default only for the duration of the call bounds every version's sockets without
+        # touching DB (libpq) or fetch (httpx, explicit timeouts) connections made elsewhere;
+        # the pipeline is single-threaded, so nothing else creates sockets in that window.
+        prev = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(DECODE_TIMEOUT_S)
+        try:
+            r = gnewsdecoder(google_url, interval=1)
+        finally:
+            socket.setdefaulttimeout(prev)
         # googlenewsdecoder <=0.1.7 reports success as `status`; 0.2.1 (20 Sep 2026)
         # renamed it `success`. Reading only the old key turned every successful
         # decode into a counted failure, tripped the breaker 25 calls in, and left CI
