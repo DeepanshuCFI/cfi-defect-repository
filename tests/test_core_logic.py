@@ -1240,6 +1240,26 @@ def test_stranded_ttl_expires_only_old_real_url_rows():
     assert [r["processing_status"] for r in q._rows] == ["expired", "new", "new"]
 
 
+def test_stranded_ttl_waits_until_the_backlog_fits_one_retry_pass():
+    # 7 Oct 2026: 3,544 of 4,633 stranded rows were already past 30 days while
+    # retry_stranded (newest first, 300/run) had tried none of them — a blanket TTL
+    # would have expired ~1,200 recoverable articles on the first run after merge.
+    from pipeline.run import RETRY_STRANDED_LIMIT, stranded_ttl_due
+    assert not stranded_ttl_due(4633)
+    assert not stranded_ttl_due(RETRY_STRANDED_LIMIT + 1)
+    assert stranded_ttl_due(RETRY_STRANDED_LIMIT)
+    assert stranded_ttl_due(0)
+
+
+def test_daily_hygiene_consults_the_stranded_ttl_gate():
+    # the gate only protects the backlog if cmd_daily's hygiene actually asks it, and
+    # the retry stage must drain at the same limit the gate is sized to
+    from pipeline import run as run_mod
+    src = inspect.getsource(run_mod.cmd_daily)
+    assert "stranded_ttl_due(" in src
+    assert "limit=RETRY_STRANDED_LIMIT" in src
+
+
 def test_stranded_count_is_separable_from_the_google_backlog():
     """health.py counted all 'new' in one bucket against a 15,000 alert, so 4,512
     stranded rows stayed invisible behind a Google pile that had drained to zero."""

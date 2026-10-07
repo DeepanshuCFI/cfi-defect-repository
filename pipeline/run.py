@@ -56,6 +56,20 @@ def resolver_alarm(r: dict | None) -> str | None:
 # margin: day-to-day noise in feed volume; a genuine recovery failure adds 1,000+/day.
 RESOLVER_BACKLOG_FLOOR = 2000
 RESOLVER_BACKLOG_GROWTH_MIN = 250
+RETRY_STRANDED_LIMIT = 300    # real-URL 'new' rows retry_stranded gives a first pass per run
+
+
+def stranded_ttl_due(stranded_count: int, per_run_limit: int = RETRY_STRANDED_LIMIT) -> bool:
+    """Whether hygiene may expire old real-URL 'new' rows this run.
+
+    The stranded TTL assumes retry_stranded has already given every row its first pass,
+    so only rows that keep RAISING on fetch are left for it. True at steady state, false
+    while a backlog exists: retry_stranded takes the NEWEST rows and the TTL would take
+    every row over 30 days — on 7 Oct 2026 that was 3,544 of the 4,633 waiting, ~1,200
+    of them from outlets that recover text 83% of the time — before any had been tried.
+    So the TTL waits until the whole pile fits in one retry pass. (Pure for testability.)
+    """
+    return stranded_count <= per_run_limit
 
 
 def resolver_canary(share_alarm: str | None, aged_now: int | None,
@@ -768,7 +782,7 @@ def cmd_daily(args) -> None:
     # than churns — 300/run against ~72/day of accrual clears the 4,512-row backlog
     # in ~3 weeks and then idles at the arrival rate. No LLM budget.
     stage("retry_stranded", lambda: cmd_retry_stranded(argparse.Namespace(
-        limit=300, delay=2.0, jsonl=False, dry_run=False)))
+        limit=RETRY_STRANDED_LIMIT, delay=2.0, jsonl=False, dry_run=False)))
     stage("process", lambda: cmd_process(argparse.Namespace(limit=1000, jsonl=False)))
     stage("geocode", lambda: cmd_geocode(argparse.Namespace(limit=1000, jsonl=False)))
     stage("watch", _watch)
@@ -794,18 +808,28 @@ def cmd_daily(args) -> None:
             # pass, so this only sweeps rows that kept RAISING on fetch. Adds no new
             # vocabulary term ('expired' is already in migration 014), so there is no
             # CHECK to widen and no migration owed.
-            cur.execute("""update source_article set processing_status='expired'
-                           where processing_status='new' and url not like %s
-                             and created_at < now() - interval '30 days'""",
+            # …but only once the pile fits in one retry pass; see stranded_ttl_due.
+            cur.execute("""select count(*) from source_article
+                           where processing_status='new' and url not like %s""",
                         (GNEWS_LIKE,))
-            expired_stranded = cur.rowcount
+            stranded_waiting = cur.fetchone()[0]
+            expired_stranded = 0
+            if stranded_ttl_due(stranded_waiting):
+                cur.execute("""update source_article set processing_status='expired'
+                               where processing_status='new' and url not like %s
+                                 and created_at < now() - interval '30 days'""",
+                            (GNEWS_LIKE,))
+                expired_stranded = cur.rowcount
+            else:
+                print(f"  stranded TTL deferred: {stranded_waiting} real-URL 'new' rows still "
+                      f"waiting for a first retry pass (> {RETRY_STRANDED_LIMIT}/run)")
             conn.commit()
         vc = connect()
         vc.autocommit = True
         vc.execute("vacuum source_article")
         vc.close()
         return {"raw_html_purged": purged, "expired_unresolved": expired,
-                "expired_stranded": expired_stranded}
+                "expired_stranded": expired_stranded, "stranded_waiting": stranded_waiting}
 
     from pipeline.processing import health
     stage("recompute", lambda: cmd_recompute(argparse.Namespace()))
