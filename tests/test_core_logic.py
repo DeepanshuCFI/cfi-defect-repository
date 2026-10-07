@@ -1149,6 +1149,19 @@ def test_process_canary_stays_quiet_when_the_budget_stopped_the_run():
                           budget_stopped=True) is None
 
 
+def test_process_canary_stays_quiet_when_extraction_stopped_on_its_budget_share():
+    # the stage records why it broke out early; a deliberate budget stop at article 0
+    # (e.g. an afternoon run inheriting the morning's spend, 85% < the 0.9 line) must
+    # not read as a dead extractor. Same dict without the reason still alarms.
+    zero = {"loaded": 1000, "extracted": 0, "extracted_light": 0, "irrelevant": 0,
+            "prefiltered": 0}
+    assert process_canary({**zero, "stopped_reason": "extraction_budget"},
+                          budget_stopped=False) is None
+    assert process_canary({**zero, "stopped_reason": "api_monthly_limit"},
+                          budget_stopped=False) is None
+    assert process_canary({**zero, "stopped_reason": None}, budget_stopped=False)
+
+
 def test_process_canary_stays_quiet_when_work_happened():
     assert process_canary({"loaded": 40, "extracted": 3, "extracted_light": 10,
                            "irrelevant": 5, "prefiltered": 2},
