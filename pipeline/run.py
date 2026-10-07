@@ -96,6 +96,13 @@ def process_canary(p_stats, budget_stopped: bool) -> str | None:
     """
     if not isinstance(p_stats, dict):
         return None
+    # A stage that stopped itself on purpose before the first article is not broken:
+    # on a day whose morning run already spent past extraction's budget share, the
+    # afternoon run loads the queue and the EXTRACTION BUDGET STOP fires at once. That
+    # share (0.5-0.85) sits below cmd_daily's 0.9 budget_stopped line, so without this
+    # the canary would read a deliberate stop as "extraction is broken" and fail the run.
+    if p_stats.get("stopped_reason") in ("extraction_budget", "api_monthly_limit"):
+        return None
     did_work = (p_stats.get("extracted", 0) + p_stats.get("extracted_light", 0)
                 + p_stats.get("irrelevant", 0) + p_stats.get("prefiltered", 0))
     if did_work == 0 and p_stats.get("loaded", 0) > 0 and not budget_stopped:
