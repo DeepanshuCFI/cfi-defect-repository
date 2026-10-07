@@ -175,7 +175,12 @@ def resolve_url(google_url: str, client: httpx.Client | None = None) -> tuple[st
     try:
         from googlenewsdecoder import gnewsdecoder
         r = gnewsdecoder(google_url, interval=1)
-        if r.get("status") and r.get("decoded_url"):
+        # googlenewsdecoder <=0.1.7 reports success as `status`; 0.2.1 (20 Sep 2026)
+        # renamed it `success`. Reading only the old key turned every successful
+        # decode into a counted failure, tripped the breaker 25 calls in, and left CI
+        # at 0 recoveries/run for 16 days (runs 94-122) while the logs blamed a
+        # Google throttle. Accept both; tests/test_resolver.py pins the contract.
+        if (r.get("status") or r.get("success")) and r.get("decoded_url"):
             out = (r["decoded_url"], True)
     except Exception as e:
         STATS.setdefault("last_error", str(e)[:200])

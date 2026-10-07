@@ -9,7 +9,13 @@ simhash>=2.1
 shapely>=2.0
 langdetect>=1.0.9
 tenacity>=9.0
-googlenewsdecoder>=0.1.7
+# Both bounded: unpinned upgrades of exactly these two silently zeroed CI's Google
+# News URL resolution for 16 days (21 Sep-6 Oct 2026): 0.2.1 renamed the result key
+# (handled in rss.resolve_url), then selectolax 1.0 made the decoder unimportable.
+# selectolax is only googlenewsdecoder's parser; listed here to hold it off 1.0.
+# tests/test_resolver.py fails if either bound is dropped.
+googlenewsdecoder>=0.1.7,<0.3
+selectolax>=0.4.12,<1.0
 pytest>=8.0
 fastapi>=0.115
 uvicorn[standard]>=0.30

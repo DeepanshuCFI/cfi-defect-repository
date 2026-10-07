@@ -57,7 +57,10 @@ Or in Supabase SQL editor: `select count(*) from config_district;` → **722**.
 - `pipeline/collectors/rss.py` — Google News RSS per district: English starter query +
   primary-language crash terms (query matrix per CLAUDE.md). Fetches feeds with a browser
   UA (Google blocks feedparser's default), resolves Google's redirector links to real
-  publisher URLs via `googlenewsdecoder` (current `AU_yq…` id format).
+  publisher URLs via `googlenewsdecoder` (current `AU_yq…` id format). The decoder and
+  its parser `selectolax` are upper-bounded in requirements.txt: unpinned upgrades of
+  exactly these two (a renamed result key, then an ImportError) silently zeroed CI's
+  resolution for 16 days in Sep–Oct 2026; `tests/test_resolver.py` pins the contract.
 - `pipeline/collectors/gdelt.py` — GDELT 2.0 DOC API wide net, per-language crash queries
   restricted to India; 429-aware with backoff (GDELT free tier throttles aggressively).
 - `pipeline/fetch.py` — robots.txt respected (cached), per-domain rate limit, Chrome UA,
