@@ -85,6 +85,21 @@ class Fetched:
     blocked_by_robots: bool = False
 
 
+_SURROGATES = re.compile(r"[\ud800-\udfff]")
+
+
+def utf8_safe(text):
+    """Drop lone UTF-16 surrogates from extracted text. trafilatura passes them through
+    from malformed pages, and Postgres (UTF-8) refuses them at write time: on 8 Oct 2026
+    one such article raised `UnicodeEncodeError: surrogates not allowed` inside
+    store.update_article_fetch, which killed the Mac drain's chunk on every retry — the
+    row stayed 'new', oldest-first put it straight back at the front. Applied to every
+    text field a fetch produces, before the dedup hash, so no stage can meet one."""
+    if not text:
+        return text
+    return _SURROGATES.sub("", text)
+
+
 def simhash_hex(text: str) -> str:
     return format(Simhash(re.findall(r"\w+", text.lower())).value, "016x")
 
@@ -111,15 +126,16 @@ def fetch_article(url: str, delay_s: float = 2.0, timeout: int = 30) -> Fetched:
     _rate_limit(url, delay_s)
     r = httpx.get(url, timeout=timeout, follow_redirects=True,
                   headers={"User-Agent": UA, "Accept-Language": "hi,en;q=0.8"})
-    html = r.text or ""
+    html = utf8_safe(r.text or "")
     clean = trafilatura.extract(html, include_comments=False,
                                 favor_precision=True) or ""
     ld = _jsonld_body(html)
     if len(ld) > len(clean):
         clean = ld
+    clean = utf8_safe(clean)
     meta = trafilatura.extract_metadata(html)
     return Fetched(
         url=str(r.url), status=r.status_code, raw_html=html, clean_text=clean.strip(),
         dedup_hash=simhash_hex(clean) if clean else "",
         published_at=(meta.date if meta else None),
-        title=(meta.title if meta else None))
+        title=utf8_safe(meta.title) if meta else None)
