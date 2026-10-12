@@ -12,6 +12,7 @@ import base64
 import json
 import re
 import socket
+import threading
 import urllib.parse
 from dataclasses import dataclass
 
@@ -99,7 +100,8 @@ CACHE_PATH = ROOT / "data" / "gnews_url_cache.json"
 CACHE_MAX = 100_000          # Google News `when:Nd` bounds the working set to ~a week
 SAVE_EVERY = 50
 FAILURE_STREAK_TRIP = 25     # consecutive failures before we stop asking for this run
-DECODE_TIMEOUT_S = 30.0      # wall-clock bound per socket operation inside a decode
+DECODE_TIMEOUT_S = 30.0      # socket default during a decode (honoured by urllib-style callers)
+DECODE_DEADLINE_S = 90.0     # hard wall-clock bound on the whole decode call, library-agnostic
 
 STATS = {"hit_disk": 0, "hit_mem": 0, "decoded_b64": 0, "ok": 0,
          "failed": 0, "skipped_throttled": 0}
@@ -186,7 +188,7 @@ def resolve_url(google_url: str, client: httpx.Client | None = None) -> tuple[st
         prev = socket.getdefaulttimeout()
         socket.setdefaulttimeout(DECODE_TIMEOUT_S)
         try:
-            r = gnewsdecoder(google_url, interval=1)
+            r = _call_with_deadline(gnewsdecoder, DECODE_DEADLINE_S, google_url, interval=1)
         finally:
             socket.setdefaulttimeout(prev)
         # googlenewsdecoder <=0.1.7 reports success as `status`; 0.2.1 (20 Sep 2026)
@@ -211,6 +213,34 @@ def resolve_url(google_url: str, client: httpx.Client | None = None) -> tuple[st
                   f"skipping resolution for the rest of this run")
         _resolve_cache[google_url] = out      # in-process only; never persisted
     return out
+
+
+def _call_with_deadline(fn, seconds: float, *args, **kwargs):
+    """Run fn in a daemon thread and give up after `seconds`.
+
+    The socket default alone is not a bound: `requests` (googlenewsdecoder <=0.1.7, the
+    Mac's version) passes timeout=None explicitly, which REPLACES the global default with
+    a fully blocking socket — measured 12 Oct 2026: with setdefaulttimeout(3) a urllib
+    call raised at once while requests.get(url) sat on a silent socket indefinitely. So a
+    Google tarpit still froze the Mac drain on 9-10 Oct until its own watchdog fired.
+    A thread that never returns is abandoned (daemon) and reported as a failed decode;
+    FAILURE_STREAK_TRIP bounds how many such threads a run can accumulate."""
+    box: dict = {}
+
+    def run():
+        try:
+            box["r"] = fn(*args, **kwargs)
+        except BaseException as e:          # re-raised on the caller's thread below
+            box["e"] = e
+
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    th.join(seconds)
+    if th.is_alive():
+        raise TimeoutError(f"decode exceeded {seconds:.0f}s — connection stalled, abandoned")
+    if "e" in box:
+        raise box["e"]
+    return box["r"]
 
 
 def _remember(google_url: str, publisher_url: str) -> None:

@@ -189,6 +189,30 @@ def test_a_stalled_decoder_connection_cannot_hang_resolve_url(clean_resolver, mo
         srv.close()
 
 
+def test_a_decoder_that_ignores_socket_timeouts_is_still_bounded(clean_resolver, monkeypatch):
+    """12 Oct 2026: `requests` (googlenewsdecoder <=0.1.7) passes timeout=None, which
+    replaces the process socket default with a fully blocking socket, so the scoped
+    default above did not stop a Google tarpit from freezing the Mac drain. The decode
+    now runs under a hard wall-clock deadline that no library can opt out of. The fake
+    below blocks in plain time.sleep — nothing a socket setting could interrupt."""
+    import time
+    monkeypatch.setattr(rss, "DECODE_DEADLINE_S", 0.5)
+
+    def fake_gnewsdecoder(url, interval=1):
+        time.sleep(30)                                  # a tarpit, as far as resolve_url can tell
+        return {"success": True, "decoded_url": "https://never.example/"}
+
+    mod = types.ModuleType("googlenewsdecoder")
+    mod.gnewsdecoder = fake_gnewsdecoder
+    monkeypatch.setitem(sys.modules, "googlenewsdecoder", mod)
+    g = GURL.format(n=11)
+    t0 = time.time()
+    assert rss.resolve_url(g) == (g, False)
+    assert time.time() - t0 < 5, "resolve_url waited on the stalled decoder"
+    assert rss.STATS["failed"] == 1
+    assert "exceeded" in rss.STATS.get("last_error", "")
+
+
 def test_decode_timeout_is_scoped_to_the_call(clean_resolver, monkeypatch):
     """The bound must not leak: the process-wide socket default is restored after each
     decode, so DB and fetch sockets created later keep their own settings."""
