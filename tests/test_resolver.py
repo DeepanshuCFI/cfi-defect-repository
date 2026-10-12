@@ -196,7 +196,7 @@ def test_a_decoder_that_ignores_socket_timeouts_is_still_bounded(clean_resolver,
     now runs under a hard wall-clock deadline that no library can opt out of. The fake
     below blocks in plain time.sleep — nothing a socket setting could interrupt."""
     import time
-    monkeypatch.setattr(rss, "DECODE_DEADLINE_S", 0.5)
+    monkeypatch.setattr(rss, "DECODE_DEADLINE_S", 0.5, raising=False)   # absent on old code: let it hang there
 
     def fake_gnewsdecoder(url, interval=1):
         time.sleep(30)                                  # a tarpit, as far as resolve_url can tell
