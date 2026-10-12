@@ -111,7 +111,11 @@ def _model(key: str) -> str:
 
 
 def cmd_submit_relevance(args) -> None:
-    store = get_store()
+    # ResilientStore, not get_store(): the prefilter loop below issues thousands of
+    # single-row status writes over ~30 min, and on 12 Oct 2026 a Mac network blip
+    # ("Can't assign requested address") killed the bare connection mid-loop twice.
+    # Every write here is an idempotent single statement — safe to redo on reconnect.
+    store = ResilientStore()
     state = _load_state()
     if state.get("relevance_batch_id") and not args.force:
         sys.exit(f"relevance batch already submitted ({state['relevance_batch_id']}); "
