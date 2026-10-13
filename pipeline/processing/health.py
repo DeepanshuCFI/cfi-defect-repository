@@ -16,7 +16,8 @@ from pipeline.db import connect
 from pipeline.store import GNEWS_LIKE
 
 DEFAULTS = {
-    "db_size_alert_mb": 400,          # free limit was 500; Pro is 8GB but drift is drift
+    "db_size_alert_mb": 2000,         # Pro plan, 8 GB disk; was 400 from the free-tier era and
+                                      # fired daily once the 12 Oct burn took the DB past 476 MB
     "queue_depth_alert": 4000,        # 'fetched' backlog diverging = budget too low
     "new_stuck_alert": 15000,         # unresolvable 'new' articles piling up
     # Real-URL 'new' rows: fetched once, no text, then stranded. Its own threshold
