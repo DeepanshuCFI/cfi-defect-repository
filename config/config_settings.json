@@ -80,7 +80,7 @@
       "llm_budget_usd_per_day_cli": 20.0
     },
     "health": {
-      "db_size_alert_mb": 400,
+      "db_size_alert_mb": 2000,
       "queue_depth_alert": 4000,
       "new_stuck_alert": 15000
     },
