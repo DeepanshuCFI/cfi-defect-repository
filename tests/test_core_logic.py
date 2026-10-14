@@ -1366,3 +1366,31 @@ def test_prior_spend_is_the_days_running_total_not_a_sum_of_totals():
     # then 3 are recorded as 5 and 8; the third run must start from 8, not 13.
     assert prior_spend_today(_Cur(5.0, 8.0), run_id=3) == 8.0
     assert prior_spend_today(_Cur(), run_id=1) == 0.0          # first run of the day
+
+
+# ------------------------------------------------- adjudication queue order
+from pipeline.processing.auto_review import pending_query  # noqa: E402
+
+
+def test_adjudication_queue_puts_gate_passing_rows_first():
+    # 14 Oct 2026: oldest-first alone starved publishing — 2,064 older pending rows
+    # sat ahead of the day's fresh candidates and only 73 of them could pass the
+    # publish gate; the rest (low-confidence or missing geocodes) can only ever be
+    # sent to a human. Publishable rows must be judged first, oldest first within.
+    sql, params = pending_query(GATE, limit=200)
+    low = " ".join(sql.lower().split())
+    order = low.split("order by", 1)[1]
+    assert order.index("coalesce(") < order.index("r.id")      # gate expression ranks before age
+    assert "r.geom is not null" in order and "r.infra_implicated" in order
+    assert "r.extraction_confidence >= %s" in order and "r.geocode_confidence >= %s" in order
+    assert ") desc" in order                                    # true (publishable) sorts first …
+    assert "coalesce(" in order                                 # … and a NULL confidence never does
+    assert low.rstrip().endswith("limit %s")                    # LIMIT stays in SQL: no 2k-row body stream
+    assert params == (0.7, 0.6, 200)                            # thresholds come from the live gate config
+
+
+def test_adjudication_queue_mirrors_the_publish_gate_config():
+    sql, params = pending_query({"extraction_confidence_min": 0.8, "geocode_confidence_min": 0.9,
+                                 "require_infra_implicated": False}, limit=50)
+    assert params == (0.8, 0.9, 50)
+    assert "infra_implicated" not in sql.lower().split("order by", 1)[1]   # gate says infra is optional
