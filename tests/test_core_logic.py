@@ -1302,3 +1302,67 @@ def test_redirector_predicate_is_not_hand_copied_again():
         literals = txt.count('"%news.google.com%"') + txt.count("'%news.google.com%'")
         assert literals == 0, f"{mod} hand-copies the redirector pattern; use GNEWS_LIKE"
     assert GNEWS_LIKE == f"%{GNEWS_HOST}%"
+
+
+# ---------------------------------------------------------------- budget day
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from pipeline.run import BUDGET_TZ, budget_day, prior_spend_today  # noqa: E402
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def test_budget_day_is_the_ist_calendar_day_not_utc():
+    # 14 Oct 2026 postmortem: a run that started 20:06Z on 13 Oct (01:36 IST, 14 Oct)
+    # was a NEW day for the self-healing guard (IST) but the SAME day for the budget
+    # meter (Postgres current_date, UTC session), so it inherited the dispatch run's
+    # $20.02, hit the budget stop before touching the queue, and still counted as
+    # the day's success — the real morning cron then went retry-only.
+    assert budget_day(datetime(2026, 10, 13, 20, 6, tzinfo=timezone.utc)) == date(2026, 10, 14)
+    # before 18:30Z the two calendars agree …
+    assert budget_day(datetime(2026, 10, 13, 18, 29, tzinfo=timezone.utc)) == date(2026, 10, 13)
+    # … and the IST day boundary is exactly 18:30Z
+    assert budget_day(datetime(2026, 10, 13, 18, 30, tzinfo=timezone.utc)) == date(2026, 10, 14)
+
+
+class _Cur:
+    """Fake cursor: records the SQL it is handed, returns canned rows."""
+    def __init__(self, *rows):
+        self.rows, self.calls = [(v,) for v in rows], []
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+
+    def fetchall(self):
+        return self.rows
+
+
+def test_prior_spend_compares_started_at_on_the_same_ist_day():
+    cur = _Cur(20.02)
+    now = datetime(2026, 10, 13, 20, 6, tzinfo=timezone.utc)
+    assert prior_spend_today(cur, run_id=131, now=now) == 20.02
+    sql, params = cur.calls[0]
+    assert "current_date" not in sql          # the UTC-day comparison behind the bug
+    assert "at time zone" in sql               # started_at is shifted into the budget zone …
+    assert date(2026, 10, 14) in params        # … and compared with the IST day
+    assert BUDGET_TZ in params and 131 in params
+
+
+def test_budget_day_matches_the_workflow_guards_calendar():
+    # daily.yml's guard decides "did today already succeed?" in Asia/Kolkata; the
+    # budget meter must count the same day or the two clocks drift apart again.
+    guard = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "daily.yml"
+    text = guard.read_text()
+    assert "TZ=Asia/Kolkata" in text and "hours=5, minutes=30" in text
+    assert BUDGET_TZ == "Asia/Kolkata"
+    t = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert budget_day(t) == t.astimezone(_IST).date()
+
+
+def test_prior_spend_is_the_days_running_total_not_a_sum_of_totals():
+    # Every run records llm_spend_usd inclusive of the baseline it inherited, i.e.
+    # the day's running total when it finished. Two earlier runs that spent 5 and
+    # then 3 are recorded as 5 and 8; the third run must start from 8, not 13.
+    assert prior_spend_today(_Cur(5.0, 8.0), run_id=3) == 8.0
+    assert prior_spend_today(_Cur(), run_id=1) == 0.0          # first run of the day

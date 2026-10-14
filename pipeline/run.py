@@ -10,6 +10,7 @@ Storage: Postgres if DATABASE_URL is set, else data/source_article.jsonl (--json
 """
 import argparse
 import sys
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -123,6 +124,41 @@ def process_canary(p_stats, budget_stopped: bool) -> str | None:
         return ("process loaded articles but handled 0 with budget remaining "
                 "(relevance/extraction is broken?)")
     return None
+
+
+# ------------------------------------------------------------------ budget day
+# The per-DAY LLM budget and daily.yml's self-healing guard must agree on what
+# "today" is. The guard counts IST days (a success at 01:33 IST is "today's run");
+# the meter used to count UTC days via Postgres current_date (the DB session is
+# UTC). A run starting 18:30–24:00Z (00:00–05:30 IST) therefore inherited the
+# previous IST day's spend, hit the budget stop before touching the queue, and
+# still counted as the day's success — so the real morning cron went retry-only
+# and nothing was extracted all day (14 Oct 2026). Both clocks now use Asia/Kolkata.
+BUDGET_TZ = "Asia/Kolkata"
+_IST = timezone(timedelta(hours=5, minutes=30))   # no DST in India; same offset the guard uses
+
+
+def budget_day(now: datetime | None = None) -> date:
+    """The calendar day the LLM budget is counted over: today in IST."""
+    now = now or datetime.now(timezone.utc)
+    return now.astimezone(_IST).date()
+
+
+def prior_spend_today(cur, run_id: int, now: datetime | None = None) -> float:
+    """USD already spent today (IST) by the OTHER pipeline_run rows, so a retry
+    run can never double the daily cap.
+
+    Each run records llm_spend_usd INCLUSIVE of the baseline it inherited (see
+    llmcost.set_baseline) — the day's running total when it finished — so the
+    spend so far is the MAX of those values, not their sum: summing double-counts
+    as soon as a day has two earlier runs (5 + (5+3) = 13 for a real 8)."""
+    cur.execute("""select (stage_stats->>'llm_spend_usd')::numeric
+                     from pipeline_run
+                    where (started_at at time zone %s::text)::date = %s
+                      and id <> %s
+                      and stage_stats->>'llm_spend_usd' is not null""",
+                (BUDGET_TZ, budget_day(now), run_id))
+    return max((float(v) for (v,) in cur.fetchall()), default=0.0)
 
 
 def tier_for(domain: str | None) -> str:
@@ -751,16 +787,14 @@ def cmd_daily(args) -> None:
     from pipeline.processing import auto_review as ar
     from scripts.export_public import main as export_main
 
-    # per-DAY budget: seed the meter with what earlier runs already spent today,
+    # per-DAY budget: seed the meter with what earlier runs already spent today —
+    # today on the IST calendar, the same one the workflow guard uses (budget_day) —
     # so a retry run can never double the daily cap.
     with connect() as conn, conn.cursor() as cur:
-        cur.execute("""select coalesce(sum((stage_stats->>'llm_spend_usd')::numeric), 0)
-                       from pipeline_run
-                       where started_at::date = current_date and id <> %s""", (run_id,))
-        prior = float(cur.fetchone()[0])
+        prior = prior_spend_today(cur, run_id)
     if prior:
         llmcost.set_baseline(prior)
-        print(f"budget: ${prior:.2f} already spent today by earlier runs "
+        print(f"budget: ${prior:.2f} already spent today (IST) by earlier runs "
               f"(daily cap ${llmcost.budget():.2f})")
 
     from pipeline.processing import watch
