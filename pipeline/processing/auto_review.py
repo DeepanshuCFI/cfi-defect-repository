@@ -93,22 +93,49 @@ def decide(verdict: dict, geocode_conf: float | None) -> str | None:
     return None
 
 
+def pending_query(gate: dict, limit: int) -> tuple[str, tuple]:
+    """The adjudication queue: rows that can PUBLISH first, then the rest; oldest
+    first within each group.
+
+    Oldest-first alone starved publishing (14 Oct 2026): 2,064 older pending rows
+    sat ahead of the day's fresh candidates and only 73 of them could pass the
+    publish gate — the rest are low-confidence (landmark/district-level) or missing
+    geocodes whose verdict can only ever be 'needs_human' (decide() never publishes
+    below the geocode floor). At ~400 verdicts/day the fresh publishable rows would
+    have waited ~5 days while the budget bought nothing the site could show.
+
+    The gate expression mirrors gate.publishable() for the fields known at row
+    level (located, infra implicated, both confidences at/above the config
+    minimums); the defect-tag check still happens after the verdict. coalesce()
+    matters: ORDER BY … DESC puts NULLs FIRST in Postgres, so a row with a NULL
+    confidence would otherwise jump the queue. LIMIT stays in SQL so a 2k-row
+    backlog never streams 2k article bodies to the runner."""
+    infra = "and r.infra_implicated" if gate.get("require_infra_implicated") else ""
+    sql = f"""
+      select r.id, r.location_text_best, r.fatalities, r.injuries, r.infra_implicated,
+             r.extraction_confidence, r.geocode_confidence, r.narrative_summary,
+             a.clean_text
+      from incident r
+      join source_article a on a.id = r.primary_source_id
+      where a.clean_text is not null and r.verification_status = 'auto'
+      order by coalesce(r.geom is not null {infra}
+                        and r.extraction_confidence >= %s
+                        and r.geocode_confidence >= %s, false) desc,
+               r.id
+      limit %s"""
+    return sql, (gate["extraction_confidence_min"], gate["geocode_confidence_min"], limit)
+
+
 def run(limit: int = 200) -> dict:
     """Apply mode: adjudicate the queue, apply decide(), audit-log every action."""
     import json as _json
 
+    from pipeline import configload
     from pipeline.db import connect
     stats = {"reviewed": 0, "auto_published": 0, "rejected": 0, "machine_ok": 0,
              "left_for_human": 0, "errors": 0}
     with connect() as conn, conn.cursor() as cur:
-        cur.execute("""
-          select r.id, r.location_text_best, r.fatalities, r.injuries, r.infra_implicated,
-                 r.extraction_confidence, r.geocode_confidence, r.narrative_summary,
-                 a.clean_text
-          from incident r
-          join source_article a on a.id = r.primary_source_id
-          where a.clean_text is not null and r.verification_status = 'auto'
-          order by r.id limit %s""", (limit,))
+        cur.execute(*pending_query(configload.settings()["confidence_gate"], limit))
         rows = cur.fetchall()
         from pipeline import llmcost
         for (iid, loc, f, i, infra, ec, gc, summary, text) in rows:
