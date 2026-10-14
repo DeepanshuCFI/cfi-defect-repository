@@ -1394,3 +1394,54 @@ def test_adjudication_queue_mirrors_the_publish_gate_config():
                                  "require_infra_implicated": False}, limit=50)
     assert params == (0.8, 0.9, 50)
     assert "infra_implicated" not in sql.lower().split("order by", 1)[1]   # gate says infra is optional
+
+
+# ------------------------------------------------- geocode attempted-at marker
+from pathlib import Path as _P  # noqa: E402
+
+from pipeline.run import geocode_pending_query, geocode_rescue_query, mark_geocode_attempted  # noqa: E402
+
+
+class _RecCur:
+    def __init__(self): self.calls = []
+    def execute(self, sql, params=None): self.calls.append((" ".join(sql.split()), params))
+
+
+def test_geocode_pending_query_takes_never_tried_rows_first_newest_first():
+    # 14 Oct 2026: `where geom is null limit 1000` with no order re-tried the ~3,000-row
+    # hard tail the Mac passes had already failed on and located ~50/1,000 a day, while
+    # fresh incidents got ~1-in-3 odds per run. Never-attempted rows go first, newest
+    # first; then the least-recently attempted, so the tail is still revisited.
+    sql, params = geocode_pending_query(1000)
+    low = sql.lower()
+    assert "where i.geom is null" in low
+    order = low.split("order by", 1)[1]
+    assert "geocode_attempted_at nulls first" in order
+    assert order.index("geocode_attempted_at") < order.index("i.id desc")
+    assert low.rstrip().endswith("limit %s") and params == (1000,)
+
+
+def test_geocode_rescue_query_uses_the_same_marker():
+    sql, params = geocode_rescue_query(1000)
+    low = sql.lower()
+    assert "geocode_confidence < 0.6" in low
+    order = low.split("order by", 1)[1]
+    assert "geocode_attempted_at nulls first" in order and "i.id desc" in order
+    assert params == (1000,)
+
+
+def test_mark_geocode_attempted_is_one_statement_or_none():
+    cur = _RecCur()
+    mark_geocode_attempted(cur, [5, 9, 12])
+    assert len(cur.calls) == 1                                  # one round trip, not one per row
+    sql, params = cur.calls[0]
+    assert "geocode_attempted_at" in sql and "now()" in sql and params == ([5, 9, 12],)
+    mark_geocode_attempted(cur, [])
+    assert len(cur.calls) == 1                                  # nothing to mark, no query
+
+
+def test_migration_adds_the_marker_column_index_and_backfill():
+    sql = (_P(__file__).resolve().parents[1] / "migrations" / "015_geocode_attempted_at.sql").read_text().lower()
+    assert "add column if not exists geocode_attempted_at timestamptz" in sql
+    assert "create index if not exists" in sql and "where geom is null" in sql
+    assert "update incident set geocode_attempted_at = now() where geom is null" in sql   # the tail counts as tried

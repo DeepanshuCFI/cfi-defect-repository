@@ -161,6 +161,48 @@ def prior_spend_today(cur, run_id: int, now: datetime | None = None) -> float:
     return max((float(v) for (v,) in cur.fetchall()), default=0.0)
 
 
+# --------------------------------------------------------------- geocode queue
+# Which rows the daily geocode budget (1,000/run) is spent on. 14 Oct 2026: `where
+# geom is null limit N` with no order kept re-trying the ~3,000-row hard tail the Mac
+# passes had already failed on (~50 located per 1,000) while fresh incidents got
+# ~1-in-3 odds per run. geocode_attempted_at (migration 015) orders the queue:
+# never-attempted first, newest first, then least-recently attempted — the tail is
+# still revisited, just after the new work. Every row tried is stamped, hit or miss.
+def geocode_pending_query(limit: int) -> tuple[str, tuple]:
+    """Unlocated incidents for the main pass, with the source article's state/district
+    as fallback anchors (extraction may have returned null)."""
+    return ("""select i.id, i.location_text_best, i.road_name, i.admin_city,
+                      coalesce(i.admin_district, a.district),
+                      coalesce(i.admin_state, a.state),
+                      i.admin_state is null and a.state is not null
+               from incident i
+               left join source_article a on a.id = i.primary_source_id
+               where i.geom is null
+               order by i.geocode_attempted_at nulls first, i.id desc
+               limit %s""", (limit,))
+
+
+def geocode_rescue_query(limit: int) -> tuple[str, tuple]:
+    """Queue items stuck below the 0.6 publish bar, for the Mapbox rescue pass."""
+    return ("""select i.id, i.location_text_best, i.road_name, i.admin_city,
+                      coalesce(i.admin_district, a.district),
+                      coalesce(i.admin_state, a.state), i.geocode_confidence,
+                      i.verification_status
+               from incident i
+               left join source_article a on a.id = i.primary_source_id
+               where i.verification_status in ('auto','needs_human')
+                 and (i.geocode_confidence is null or i.geocode_confidence < 0.6)
+               order by i.geocode_attempted_at nulls first, i.id desc
+               limit %s""", (limit,))
+
+
+def mark_geocode_attempted(cur, ids) -> None:
+    """Stamp every row a pass tried, located or not — one statement, not one per row."""
+    ids = list(ids)
+    if ids:
+        cur.execute("update incident set geocode_attempted_at = now() where id = any(%s)", (ids,))
+
+
 def tier_for(domain: str | None) -> str:
     if not domain:
         return "aggregator"
@@ -618,13 +660,7 @@ def cmd_geocode(args) -> None:
             # null: the collector always knows them (the district query that found the
             # article). Without this the geocoder is unanchored and can match a village
             # homonym in any state (#276: Hathras UP -> Odisha).
-            cur.execute("""select i.id, i.location_text_best, i.road_name, i.admin_city,
-                                  coalesce(i.admin_district, a.district),
-                                  coalesce(i.admin_state, a.state),
-                                  i.admin_state is null and a.state is not null
-                           from incident i
-                           left join source_article a on a.id = i.primary_source_id
-                           where i.geom is null limit %s""", (args.limit,))
+            cur.execute(*geocode_pending_query(args.limit))
             rows = cur.fetchall()
             print(f"geocoding {len(rows)} incident(s)…")
             for iid, loc, road, city, distr, state, used_fallback in rows:
@@ -650,6 +686,7 @@ def cmd_geocode(args) -> None:
                 dist[g["geocode_method"] or "unresolved"] = dist.get(g["geocode_method"] or "unresolved", 0) + 1
                 print(f"  #{iid} {g['geocode_method'] or 'UNRESOLVED'} "
                       f"conf={g['geocode_confidence']} {(g['display_name'] or '')[:70]}")
+            mark_geocode_attempted(cur, (r[0] for r in rows))
             conn.commit()
 
             # RESCUE PASS (Mapbox only): re-geocode queue items stuck below the 0.6
@@ -658,16 +695,7 @@ def cmd_geocode(args) -> None:
             # how the geocode-blocked queue melts without humans.
             from pipeline.settings import MAPBOX_TOKEN
             if MAPBOX_TOKEN:
-                cur.execute("""
-                  select i.id, i.location_text_best, i.road_name, i.admin_city,
-                         coalesce(i.admin_district, a.district),
-                         coalesce(i.admin_state, a.state), i.geocode_confidence,
-                         i.verification_status
-                  from incident i
-                  left join source_article a on a.id = i.primary_source_id
-                  where i.verification_status in ('auto','needs_human')
-                    and (i.geocode_confidence is null or i.geocode_confidence < 0.6)
-                  limit %s""", (args.limit,))
+                cur.execute(*geocode_rescue_query(args.limit))
                 rescue = cur.fetchall()
                 print(f"\nrescue pass: re-geocoding {len(rescue)} low-confidence item(s)…")
                 saved = 0
@@ -693,6 +721,7 @@ def cmd_geocode(args) -> None:
                     saved += 1
                     print(f"  rescued #{iid}: {old_conf} -> {g['geocode_confidence']} "
                           f"({g['geocode_method']})")
+                mark_geocode_attempted(cur, (r[0] for r in rescue))
                 conn.commit()
                 print(f"rescue pass: {saved} improved")
     else:
