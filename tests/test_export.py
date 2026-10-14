@@ -1,0 +1,96 @@
+"""The exporter is the only bridge from the DB to the public site. It must not issue
+per-incident queries: 6,188 public incidents × 2 round trips × ~160 ms to the Tokyo
+pooler was the 33-minute export step of 14 Oct 2026 (22 → 26 → 33 min across the
+day's three runs, growing with the table). Children are fetched in bulk and grouped.
+
+Run: python3 -m pytest tests/ -q
+"""
+import json
+from datetime import date
+
+from scripts import export_public as ex
+
+TIERS = {"critical": 75, "high": 50, "medium": 25, "watch": 0}
+
+
+class _Cur:
+    """Fake cursor: answers each of the exporter's queries from canned rows and
+    counts how many statements it was asked to run."""
+    def __init__(self, n_incidents: int):
+        self.n, self.calls, self._last = n_incidents, [], ""
+
+    def __enter__(self): return self
+
+    def __exit__(self, *a): return False
+
+    def execute(self, sql, params=None):
+        self.calls.append(" ".join(sql.split()))
+        self._last = self.calls[-1]
+
+    def fetchone(self):
+        return (TIERS,)
+
+    def fetchall(self):
+        q = self._last
+        if "config_defect_taxonomy" in q:
+            return [("potholes_or_broken_surface", "Potholes / broken surface")]
+        if "public_hotspot" in q:
+            return []
+        if "public_incident_defect" in q:
+            if "incident_id=%s" in q:                     # legacy per-incident shape
+                return [("potholes_or_broken_surface", 0.9, "a crater")]
+            return [(i, "potholes_or_broken_surface", 0.9, "a crater") for i in range(self.n)]
+        if "incident_source" in q:
+            if "incident_id=%s" in q:
+                return [("https://x/1", "Outlet", date(2026, 10, 1))]
+            return [(i, "https://x/1", "Outlet", date(2026, 10, 1)) for i in range(self.n)]
+        if "from public_incident i" in q:
+            return [(i, 1, date(2026, 10, 2), "loc", "NH-1", "nh", "Bihar", "Patna", 1, 2,
+                     ["pedestrian"], "summary", "auto_published", 0.9, 0.8, "road_city")
+                    for i in range(self.n)]
+        raise AssertionError(f"unexpected query: {q[:80]}")
+
+
+class _Conn:
+    def __init__(self, cur): self.cur = cur
+    def cursor(self): return self.cur
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def _run(monkeypatch, tmp_path, n):
+    cur = _Cur(n)
+    monkeypatch.setattr(ex, "OUT", tmp_path)
+    monkeypatch.setattr(ex, "connect", lambda: _Conn(cur))
+    ex.main()
+    return cur, json.loads((tmp_path / "incidents.json").read_text())
+
+
+def test_export_query_count_does_not_grow_with_the_incident_table(monkeypatch, tmp_path):
+    small, _ = _run(monkeypatch, tmp_path, 3)
+    big, data = _run(monkeypatch, tmp_path, 300)
+    assert len(big.calls) == len(small.calls) <= 8, (len(small.calls), len(big.calls))
+    assert len(data) == 300
+    assert data[7]["defects"] == [{"type": "potholes_or_broken_surface",
+                                   "label": "Potholes / broken surface",
+                                   "conf": 0.9, "evidence": "a crater"}]
+    assert data[7]["sources"] == [{"url": "https://x/1", "outlet": "Outlet", "date": "2026-10-01"}]
+
+
+def test_export_still_reads_only_public_views(monkeypatch, tmp_path):
+    cur, _ = _run(monkeypatch, tmp_path, 2)
+    child = [q for q in cur.calls if "incident_defect" in q or "incident_source" in q]
+    assert child and all("public_incident" in q for q in child)   # §8 gate at the data layer
+
+
+def test_attach_children_groups_by_incident_and_keeps_source_order():
+    incidents = [{"id": 1}, {"id": 2}, {"id": 3}]
+    defects = [(1, "potholes_or_broken_surface", 0.9, "s1"), (1, "no_street_lighting", 0.7, "s2")]
+    sources = [(2, "https://a", "A", date(2026, 1, 1)), (2, "https://b", "B", None)]
+    out = ex.attach_children(incidents, defects, sources, {"no_street_lighting": "No street lighting"})
+    assert [d["type"] for d in out[0]["defects"]] == ["potholes_or_broken_surface", "no_street_lighting"]
+    assert out[0]["defects"][1]["label"] == "No street lighting"
+    assert out[0]["defects"][0]["label"] == "potholes_or_broken_surface"   # unknown code falls back to itself
+    assert out[1]["sources"] == [{"url": "https://a", "outlet": "A", "date": "2026-01-01"},
+                                 {"url": "https://b", "outlet": "B", "date": None}]
+    assert out[2]["defects"] == [] and out[2]["sources"] == []
