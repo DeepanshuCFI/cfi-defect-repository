@@ -47,6 +47,26 @@ def tier_of(score, tiers):
     return "watch"
 
 
+def attach_children(incidents: list[dict], defect_rows, source_rows, labels: dict) -> list[dict]:
+    """Group bulk-fetched defects and sources onto their incidents (pure, unit-tested).
+
+    defect_rows: (incident_id, defect_type, confidence, evidence_snippet), in output order.
+    source_rows: (incident_id, url, outlet, published_date), already ordered by date.
+    Every incident gets both keys, empty lists when it has no children."""
+    defects: dict = {}
+    for iid, t, c, snippet in defect_rows:
+        defects.setdefault(iid, []).append(
+            {"type": t, "label": labels.get(t, t), "conf": c, "evidence": snippet})
+    sources: dict = {}
+    for iid, url, outlet, d in source_rows:
+        sources.setdefault(iid, []).append(
+            {"url": url, "outlet": outlet, "date": str(d) if d else None})
+    for inc in incidents:
+        inc["defects"] = defects.get(inc["id"], [])
+        inc["sources"] = sources.get(inc["id"], [])
+    return incidents
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     with connect() as conn, conn.cursor() as cur:
@@ -96,18 +116,24 @@ def main() -> None:
         for r in cur.fetchall():
             inc = dict(zip(cols, r))
             inc["date"] = str(inc["date"]) if inc["date"] else None
-            cur.execute("""
-              select d.defect_type, d.defect_confidence, d.evidence_snippet
-              from public_incident_defect d where d.incident_id=%s""", (inc["id"],))
-            inc["defects"] = [{"type": t, "label": labels.get(t, t), "conf": c,
-                               "evidence": s} for t, c, s in cur.fetchall()]
-            cur.execute("""
-              select a.url, a.outlet_name, a.published_at::date
-              from incident_source s join source_article a on a.id = s.source_article_id
-              where s.incident_id=%s order by a.published_at""", (inc["id"],))
-            inc["sources"] = [{"url": u, "outlet": o, "date": str(d) if d else None}
-                              for u, o, d in cur.fetchall()]
             incidents.append(inc)
+        # Children in TWO set queries, not two per incident. The per-incident version
+        # cost 2 round trips × ~160 ms to the pooler for every public incident: 6,188
+        # incidents = 12,376 round trips = the 33-minute export step of 14 Oct 2026,
+        # growing with the table. Both still read through public_* views (§8 gate).
+        cur.execute("""
+          select d.incident_id, d.defect_type, d.defect_confidence, d.evidence_snippet
+          from public_incident_defect d
+          order by d.incident_id, d.id""")
+        defect_rows = cur.fetchall()
+        cur.execute("""
+          select s.incident_id, a.url, a.outlet_name, a.published_at::date
+          from incident_source s
+          join source_article a on a.id = s.source_article_id
+          join public_incident i on i.id = s.incident_id
+          order by s.incident_id, a.published_at, a.id""")   # a.id: stable order for same-day sources
+        source_rows = cur.fetchall()
+        attach_children(incidents, defect_rows, source_rows, labels)
         (OUT / "incidents.json").write_text(json.dumps(incidents, ensure_ascii=False))
 
         meta = {
