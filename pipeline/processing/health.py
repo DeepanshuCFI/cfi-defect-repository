@@ -8,6 +8,7 @@ arriving as provider enforcement emails. Silent when all green.
 Thresholds live in config settings under "health" (config/config_settings.json).
 """
 import os
+import re
 
 import httpx
 
@@ -28,7 +29,26 @@ DEFAULTS = {
     "stranded_new_alert": 1500,
     "min_extracted_last_run": 1,      # 0 extractions = budget/API/collect silently dead
     "min_published_total_growth": 0,  # reserved for future use
+    # Yield floors (16 Oct 2026 funnel): pins per 1,000 articles ran at 40 over 3.5
+    # months (43 Hindi, 12 English) and 13% of fetched articles carried defect
+    # vocabulary while producing 68% of pins. These are drift detectors, set well
+    # below baseline — crossing one means collection is no longer aimed at the
+    # publishable class (a feed change, a keyword regression, a blocked outlet).
+    "min_yield_per_1000_7d": 10,
+    "min_defect_vocab_share_7d": 0.05,
 }
+
+
+def yield_per_1000(pins: int, articles: int) -> float | None:
+    """Published pins per 1,000 collected articles — None when nothing was collected."""
+    return None if not articles else round(1000.0 * pins / articles, 1)
+
+
+def defect_vocab_pattern(keywords: dict) -> str:
+    """Case-insensitive regex alternation of every infra_defect term, all languages —
+    the same vocabulary cmd_process uses to put defect stories first in line."""
+    terms = sorted({t.lower() for lang in keywords.values() for t in lang.get("infra_defect", [])})
+    return "|".join(re.escape(t) for t in terms)
 
 
 def _cfg() -> dict:
@@ -82,6 +102,34 @@ def collect_checks() -> list[tuple[str, bool, str]]:
                         or fetched == 0,
                         f"last run extracted {extracted} with {fetched} queued "
                         f"(alert below {cfg['min_extracted_last_run']})"))
+
+        # ---- yield: is collection aimed at the publishable class? (16 Oct 2026 funnel)
+        # Denominator = this week's articles that have text (near-dups and fetch
+        # failures excluded); pins are counted by the week their ARTICLE arrived, so
+        # the figure lags publication by a day or two and is a trend, not a tally.
+        pat = defect_vocab_pattern(configload.keywords())
+        cur.execute("""select count(*),
+                              count(*) filter (where clean_text ~* %s)
+                       from source_article
+                       where created_at >= now() - interval '7 days'
+                         and processing_status in ('fetched', 'extracted', 'irrelevant')""",
+                    (pat,))
+        arts7, vocab7 = cur.fetchone()
+        cur.execute("""select count(*)
+                       from incident i join source_article sa on sa.id = i.primary_source_id
+                       where i.verification_status in ('auto_published', 'reviewed', 'verified')
+                         and sa.created_at >= now() - interval '7 days'""")
+        pins7 = cur.fetchone()[0]
+        y = yield_per_1000(pins7, arts7)
+        out.append(("yield_7d", y is None or y >= cfg["min_yield_per_1000_7d"],
+                    f"{y} pins per 1,000 articles this week ({pins7} pins / {arts7} articles; "
+                    f"alert below {cfg['min_yield_per_1000_7d']}; 3.5-month baseline 40)"))
+        share = None if not arts7 else vocab7 / arts7
+        out.append(("defect_vocab_share_7d",
+                    share is None or share >= cfg["min_defect_vocab_share_7d"],
+                    f"{'n/a' if share is None else f'{share:.0%}'} of this week's articles carry "
+                    f"defect vocabulary (alert below {cfg['min_defect_vocab_share_7d']:.0%}; "
+                    "baseline 13%, which produced 68% of all pins)"))
     return out
 
 

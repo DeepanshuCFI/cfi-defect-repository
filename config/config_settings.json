@@ -82,7 +82,9 @@
     "health": {
       "db_size_alert_mb": 2000,
       "queue_depth_alert": 4000,
-      "new_stuck_alert": 15000
+      "new_stuck_alert": 15000,
+      "min_yield_per_1000_7d": 10,
+      "min_defect_vocab_share_7d": 0.05
     },
     "models_pricing": {
       "_comment": "USD per million tokens; keep in sync with anthropic.com/pricing",
