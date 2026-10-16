@@ -1593,3 +1593,45 @@ def test_blocklist_is_configured_with_its_evidence():
     assert set(ing["blocked_domains"]) >= {"etvbharat.com", "hindi.news18.com", "navbharattimes.indiatimes.com",
                                            "abplive.com", "news4nation.com"}
     assert "pins per 1,000" in ing["blocked_domains_note"]
+# ------------------------------------------------- district cadence (step 7, 16 Oct 2026)
+# Yield per district ranged from 135 to 0 pins per 1,000 articles with no clean cut-off
+# (top-10 districts = 19% of pins, bottom half = 23%), so districts are not pruned but
+# queried on a cadence: top third by recent yield daily, middle third every other day,
+# bottom third every third day. Each class is spread across days so the daily query
+# count stays even, and a district's collection window grows with its cadence so no
+# story falls between two queries. Unrated (thin or new) districts run daily.
+from pipeline.run import (district_cadence, district_due, district_yield_ranks,  # noqa: E402
+                          DISTRICT_YIELD_SQL, CADENCE_WINDOW_DAYS)
+
+
+def test_district_cadence_tiers_and_daily_default_for_unrated():
+    assert district_cadence(None) == 1 and district_cadence(0.0) == 1 and district_cadence(0.32) == 1
+    assert district_cadence(0.34) == 2 and district_cadence(0.66) == 2
+    assert district_cadence(0.67) == 3 and district_cadence(0.99) == 3
+
+
+def test_district_due_hits_exactly_once_per_cycle_and_daily_always():
+    for cad in (2, 3):
+        for salt in ("Uttar Pradesh/Bhadohi", "Bihar/Sheikhpura", "Rajasthan/Bundi"):
+            assert sum(district_due(cad, day, salt) for day in range(739_000, 739_000 + cad)) == 1
+    assert all(district_due(1, day, "anything") for day in range(5))
+    # different districts in the same class land on different days (spread, not a wave)
+    days = {salt: next(d for d in range(3) if district_due(3, d, salt))
+            for salt in ("a/1", "a/2", "a/3", "a/4", "a/5", "a/6")}
+    assert len(set(days.values())) > 1
+
+
+def test_district_yield_ranks_order_by_pins_per_article_and_leave_thin_districts_unrated():
+    rows = [("UP", "Bhadohi", 400, 54), ("UP", "Baghpat", 400, 3), ("BR", "Patna", 400, 20), ("RJ", "Jalore", 40, 5)]
+    r = district_yield_ranks(rows, min_articles=100)
+    assert r[("UP", "Bhadohi")] == 0.0
+    assert abs(r[("BR", "Patna")] - 1 / 3) < 1e-9 and abs(r[("UP", "Baghpat")] - 2 / 3) < 1e-9
+    assert r[("RJ", "Jalore")] is None                 # 40 articles: too thin to rate → daily
+    assert district_yield_ranks([]) == {}
+
+
+def test_district_yield_sql_uses_the_window_and_published_statuses():
+    low = " ".join(DISTRICT_YIELD_SQL.lower().split())
+    assert CADENCE_WINDOW_DAYS == 60 and f"interval '{CADENCE_WINDOW_DAYS} days'" in low
+    assert "'auto_published'" in low and "'reviewed'" in low
+    assert "processing_status in ('fetched', 'extracted', 'irrelevant')" in low   # articles with text only
