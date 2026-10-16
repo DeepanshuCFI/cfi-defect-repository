@@ -27,15 +27,22 @@ class _Cur:
         self.calls.append(" ".join(sql.split()))
         self._last = self.calls[-1]
 
+
     def fetchone(self):
         if "priority_tier_quantiles" in self._last:
             return ({"critical": 0.05, "high": 0.15, "medium": 0.40},)
+        if "key='ingestion'" in self._last:
+            return ({"daily_states": ["Bihar", "Uttar Pradesh", "Rajasthan"]},)
+        if "config_district" in self._last:
+            return (146,)
         return (TIERS,)
 
     def fetchall(self):
         q = self._last
         if "config_defect_taxonomy" in q:
             return [("potholes_or_broken_surface", "Potholes / broken surface")]
+        if "config_district" in q:
+            return []
         if "public_hotspot" in q:
             # one feature-level hotspot (road with repeat crashes) and one point-level
             return [(1, 82.5, 25.4, "Sandi-Hardoi Road", "Uttar Pradesh", "Hardoi", None, 5, 2, 7,
@@ -121,3 +128,23 @@ def test_hotspot_export_tiers_by_quantile_and_states_what_is_hidden(monkeypatch,
     p = feats[0]["properties"]
     assert (p["records_public"], p["records_hidden"], p["hidden_casualty_crashes_6mo"]) == (5, 94, 40)
     assert feats[1]["properties"]["records_hidden"] == 0                         # no raw -> nothing hidden
+def test_export_writes_one_member_file_per_hotspot_and_states_coverage(monkeypatch, tmp_path):
+    _run(monkeypatch, tmp_path, 4)                       # 4 incidents, all in hotspot 1
+    files = sorted(p.name for p in (tmp_path / "incidents").glob("*.json"))
+    assert files == ["1.json", "2.json"]                 # every public hotspot gets a file, even with no members
+    assert len(json.loads((tmp_path / "incidents" / "1.json").read_text())) == 4
+    assert json.loads((tmp_path / "incidents" / "2.json").read_text()) == []
+    feats = json.loads((tmp_path / "hotspots.geojson").read_text())["features"]
+    assert feats[0]["properties"]["road_types"] == ["nh"] and feats[1]["properties"]["road_types"] == []
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert meta["road_types"] == ["nh"] and meta["with_casualties"] == 4
+    assert meta["coverage"] == {"states": ["Bihar", "Uttar Pradesh", "Rajasthan"], "districts": 146}
+    # stale per-hotspot files from a previous export are removed
+    (tmp_path / "incidents" / "999.json").write_text("[]")
+    _run(monkeypatch, tmp_path, 1)
+    assert not (tmp_path / "incidents" / "999.json").exists()
+
+
+def test_group_by_hotspot_keeps_every_hotspot():
+    out = ex.group_by_hotspot([{"hotspot_id": 2, "id": 9}, {"hotspot_id": 2, "id": 10}], [1, 2])
+    assert out == {1: [], 2: [{"hotspot_id": 2, "id": 9}, {"hotspot_id": 2, "id": 10}]}
