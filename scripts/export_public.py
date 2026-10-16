@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.db import connect          # noqa: E402
+from pipeline.processing.score import quantile_thresholds  # noqa: E402
 from pipeline.settings import ROOT       # noqa: E402
 
 OUT = ROOT / "web" / "public" / "data"
@@ -70,8 +71,12 @@ def attach_children(incidents: list[dict], defect_rows, source_rows, labels: dic
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     with connect() as conn, conn.cursor() as cur:
-        cur.execute("select value from config_setting where key='priority_tiers'")
-        tiers = cur.fetchone()[0]
+        # tiers are quantiles of the public score distribution (see score.py); the
+        # optional config key holds the shares, never fixed cut-offs
+        cur.execute("select value from config_setting where key='priority_tier_quantiles'")
+        row = cur.fetchone()
+        quantiles = row[0] if row and isinstance(row[0], dict) and \
+            all(0 < float(v) <= 1 for v in row[0].values()) else None
         cur.execute("""select code, label from config_defect_taxonomy""")
         labels = dict(cur.fetchall())
 
@@ -83,9 +88,12 @@ def main() -> None:
                  h.first_crash_date, h.last_crash_date, h.dominant_defects,
                  h.priority_score, h.score_breakdown, h.escalation_candidate, h.status
           from public_hotspot h""")
+        rows = cur.fetchall()
+        tiers = quantile_thresholds([r[13] for r in rows], quantiles)
         feats = []
         for (hid, lon, lat, road, st, dist, city, n, fat, inj, d0, d1,
-             dom, score, breakdown, esc, status) in cur.fetchall():
+             dom, score, breakdown, esc, status) in rows:
+            raw = (breakdown or {}).get("raw") or {}
             feats.append({
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [round(lon, 6), round(lat, 6)]},
@@ -100,6 +108,10 @@ def main() -> None:
                     # 'point' = >= 3 distinct coordinates behind the flag; 'feature' = a
                     # named road/landmark with repeat crashes (16 Oct 2026, see score.py)
                     "location_precision": (breakdown or {}).get("location_precision", "feature"),
+                    # what the score rests on vs what the reader can see (16 Oct 2026)
+                    "records_public": raw.get("records_public", n),
+                    "records_hidden": max(0, int(raw.get("records_total", n) or 0) - int(raw.get("records_public", n) or 0)),
+                    "hidden_casualty_crashes_6mo": raw.get("hidden_casualty_crashes_6mo", 0),
                 }})
         (OUT / "hotspots.geojson").write_text(json.dumps(
             {"type": "FeatureCollection", "features": feats}, ensure_ascii=False))
@@ -152,6 +164,8 @@ def main() -> None:
                               if f["properties"]["state"]}),
             "defect_labels": labels,
             "tiers": tiers,
+            "tier_rule": "quantiles of the public score distribution: " + ", ".join(
+                f"{k} = top {int(v * 100)}%" for k, v in (quantiles or {"critical": .05, "high": .15, "medium": .40}).items()),
         }
         (OUT / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
     print(f"exported: {len(feats)} hotspots · {len(incidents)} incidents -> {OUT}")

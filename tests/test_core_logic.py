@@ -1666,3 +1666,42 @@ def test_archived_is_a_known_status_and_never_public():
     assert "'archived'" in mig and "incident_verification_status_check" in mig
     assert "'archived'" not in (root / "010_auto_publish_needs_defect.sql").read_text()   # public_incident view
     assert "'archived'" not in (root / "008_needs_human_status.sql").read_text()          # review_queue view
+
+
+# ------------------------------------------- score over public evidence (launch review, 16 Oct 2026)
+# The priority score and tier were computed over every record clustered at a location,
+# including the two thirds that are crash-only and never publish, while the dossier
+# showed only the public rows: the top-10 by score were all Critical at 94-96 with seven
+# showing zero public deaths, 426 of 529 Critical hotspots showed no public deaths, and
+# one hotspot showed 0 deaths publicly while its score was built on 619 hidden ones.
+# Scoring inputs now come from public members only; tiers are quantiles of the public
+# score distribution (Critical = top 5%, not 17%); hidden counts ride in the breakdown.
+from pipeline.processing.score import (quantile_thresholds, TIER_QUANTILES, agg_params,  # noqa: E402
+                                       PUBLIC_SOURCES_SQL, PUBLIC_SEVERITY_SQL)
+from pipeline.processing import score as _sc  # noqa: E402
+
+
+def test_quantile_thresholds_cut_the_top_shares_and_stay_monotonic():
+    t = quantile_thresholds(range(1, 101))                   # scores 1..100
+    assert t == {"critical": 96.0, "high": 86.0, "medium": 61.0, "watch": 0.0}
+    assert t["critical"] >= t["high"] >= t["medium"] >= t["watch"]
+    assert TIER_QUANTILES == {"critical": 0.05, "high": 0.15, "medium": 0.40}
+    assert quantile_thresholds([]) == {"critical": 75.0, "high": 50.0, "medium": 25.0, "watch": 0.0}
+    assert quantile_thresholds([50, 50, 50, 50])["critical"] == 50.0      # ties: everyone at the cut qualifies
+    custom = quantile_thresholds(range(1, 101), {"critical": 0.10, "high": 0.30, "medium": 0.60})
+    assert custom["critical"] == 91.0 and custom["high"] == 71.0 and custom["medium"] == 41.0
+
+
+def test_scoring_inputs_come_from_public_members_only():
+    low = " ".join(_sc.HOTSPOT_AGG_SQL.lower().split())
+    assert "left join public_incident pi on pi.id = i.id" in low
+    for col in ("sum(i.fatalities) filter (where pi.id is not null)", "sum(i.injuries) filter (where pi.id is not null)",
+                "avg(i.geocode_confidence) filter (where pi.id is not null)"):
+        assert col in low, col
+    assert "coalesce(i.crash_date, a.published_at::date, i.created_at::date)" in low   # a report date every row has
+    assert "count(i.id) filter (where pi.id is not null)" in low                            # records_public
+    assert "pi.id is null" in low and "i.fatalities > 0 or i.injuries > 0" in low           # hidden casualty crashes
+    assert "join public_incident" in " ".join(PUBLIC_SOURCES_SQL.lower().split())
+    assert "join public_incident" in " ".join(PUBLIC_SEVERITY_SQL.lower().split())
+    from datetime import date as _d
+    assert len(agg_params(_d(2026, 10, 16))) == _sc.HOTSPOT_AGG_SQL.count("%s")
