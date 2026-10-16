@@ -26,6 +26,55 @@ from pipeline.db import connect
 VULNERABLE = {"pedestrian", "cyclist", "two_wheeler"}
 
 
+# ------------------------------------------------------------- escalation flag
+# Which incidents VOTE toward the headline rule (>= min_incidents in window_months).
+# 16 Oct 2026 audit of the 1,770 flagged hotspots: 1,729 sat on one or two identical
+# coordinates (avg 1.2 distinct points) because every story naming the same road or
+# landmark resolves to the same feature point; 948 held no defect report at all; wide-
+# area features ('Itawa-Bareilly Highway', 'Ganga Expressway') contributed 35-86
+# "incidents at one location". Two changes, and one honest label:
+#   1. only CRASHES WITH CASUALTIES vote — a pothole or waterlogging complaint is
+#      evidence of a defect, not an incident at a blackspot (87% of published pins are
+#      casualty-free defect reports, and they were being counted);
+#   2. only TIGHT pins vote — geocode_qualifier is null means the hit was anchored,
+#      verified and spans < WIDE_AREA_KM; a pin somewhere on 47 km of expressway says
+#      nothing about a location;
+#   3. distinct_points is recorded so the surface can say what it has: >= 3 distinct
+#      coordinates is a point-level pattern, anything less is a named feature (a road)
+#      with repeat crashes — real, useful to a PWD/NHAI engineer, but road-level.
+# Scoring components (frequency, casualties, ...) are unchanged; only the flag and the
+# breakdown metadata move.
+ESCALATION_INCIDENT_SQL = "(i.fatalities > 0 or i.injuries > 0) and i.geocode_qualifier is null"
+POINT_PRECISION_MIN_DISTINCT = 3
+
+# LEFT JOIN from hotspot (hotspots with no incidents still score — see run()); params:
+# (today, today, VULNERABLE, today, today).
+HOTSPOT_AGG_SQL = f"""
+  select h.id, coalesce(sum(i.fatalities),0), coalesce(sum(i.injuries),0),
+         count(i.id) filter (where i.crash_date >= %s::date - interval '6 months'),
+         %s::date - max(i.crash_date),
+         avg(case when i.victim_types && %s::text[] then 1.0 else 0.0 end),
+         avg(i.geocode_confidence),
+         count(i.id) filter (where i.crash_date >= %s::date - interval '6 months'
+                               and {ESCALATION_INCIDENT_SQL}),
+         count(distinct ST_AsText(i.geom::geometry))
+               filter (where i.crash_date >= %s::date - interval '6 months'
+                         and {ESCALATION_INCIDENT_SQL})
+  from hotspot h left join incident i on i.cluster_id = h.id
+  group by h.id"""
+
+
+def escalation_flag(esc_incidents_6mo: int, esc_cfg: dict) -> bool:
+    """The headline rule, over voting incidents only (pure, unit-tested)."""
+    return int(esc_incidents_6mo or 0) >= int(esc_cfg["min_incidents"])
+
+
+def location_precision(distinct_points: int | None) -> str:
+    """'point' when >= POINT_PRECISION_MIN_DISTINCT distinct coordinates stand behind the
+    flag, else 'feature' — the hotspot is a named road/landmark with repeat crashes."""
+    return "point" if (distinct_points or 0) >= POINT_PRECISION_MIN_DISTINCT else "feature"
+
+
 def components(raw: dict, cfg: dict) -> dict:
     """Pure scoring math — unit-tested. raw: fatalities, injuries, inc_6mo,
     days_since_last, vulnerable_share, max_severity, n_sources, avg_geocode_conf."""
@@ -86,14 +135,7 @@ def run(today: date | None = None) -> dict:
     esc = cfg["escalation_rule"]
     today = today or date.today()
     with connect() as conn, conn.cursor() as cur:
-        cur.execute("""
-          select h.id, coalesce(sum(i.fatalities),0), coalesce(sum(i.injuries),0),
-                 count(i.id) filter (where i.crash_date >= %s::date - interval '6 months'),
-                 %s::date - max(i.crash_date),
-                 avg(case when i.victim_types && %s::text[] then 1.0 else 0.0 end),
-                 avg(i.geocode_confidence)
-          from hotspot h left join incident i on i.cluster_id = h.id
-          group by h.id""", (today, today, list(VULNERABLE)))
+        cur.execute(HOTSPOT_AGG_SQL, (today, today, list(VULNERABLE), today, today))
         agg = {r[0]: r[1:] for r in cur.fetchall()}
 
         cur.execute("""
@@ -112,13 +154,14 @@ def run(today: date | None = None) -> dict:
         severity = dict(cur.fetchall())
 
         ids, scores, breakdowns, escalates = [], [], [], []
-        for hid, (fat, inj, inc6, days_last, vuln, gconf) in agg.items():
+        for hid, (fat, inj, inc6, days_last, vuln, gconf, esc6, pts) in agg.items():
             raw = {"fatalities": int(fat), "injuries": int(inj), "inc_6mo": int(inc6),
                    "days_since_last": days_last if days_last is None else int(days_last),
                    "vulnerable_share": float(vuln or 0),
                    "max_severity": float(severity.get(hid) or 0),
                    "n_sources": int(sources.get(hid, 0)),
-                   "avg_geocode_conf": float(gconf or 0)}
+                   "avg_geocode_conf": float(gconf or 0),
+                   "esc_incidents_6mo": int(esc6), "distinct_points": int(pts)}
             comp = components(raw, cfg)
             score = total_score(comp, weights)
             ids.append(hid)
@@ -126,8 +169,9 @@ def run(today: date | None = None) -> dict:
             breakdowns.append(json.dumps({
                 "raw": raw, "components": {k: round(v, 4) for k, v in comp.items()},
                 "weights": weights, "tier": tier(score, cfg["priority_tiers"]),
+                "location_precision": location_precision(raw["distinct_points"]),
                 "computed_for": str(today)}))
-            escalates.append(raw["inc_6mo"] >= esc["min_incidents"])
+            escalates.append(escalation_flag(raw["esc_incidents_6mo"], esc))
 
         if ids:
             cur.execute("""

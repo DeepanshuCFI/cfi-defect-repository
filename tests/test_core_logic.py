@@ -1494,3 +1494,27 @@ def test_query_defect_is_a_known_keyword_category_everywhere():
     assert "query_defect" in lc.KEYWORD_CATEGORIES and "query_defect" in configload.KEYWORD_CATEGORIES
     mig = (configload.CONFIG_DIR.parent / "migrations" / "016_query_defect_keywords.sql").read_text()
     assert "'query_defect'" in mig and "config_keyword" in mig
+# ------------------------------------------- escalation = casualty crashes, tight pins
+# 16 Oct 2026 audit of the 1,770 escalation hotspots: 1,729 sat on one or two identical
+# coordinates (avg 1.2 distinct points) because many stories about the same named road
+# resolve to the same feature point; 948 held no defect report; wide-area features
+# ('Itawa-Bareilly Highway', 'Ganga Expressway') contributed 35-86 "incidents at one
+# location". The flag now counts only casualty crashes on tight (non wide-area) pins,
+# and records how many distinct points stand behind it so the surface can say "road-level".
+from pipeline.processing import score as _score  # noqa: E402
+
+
+def test_escalation_incident_predicate_is_casualty_crash_on_a_tight_pin():
+    pred = " ".join(_score.ESCALATION_INCIDENT_SQL.lower().split())
+    assert "i.fatalities > 0 or i.injuries > 0" in pred        # a defect complaint is not a crash
+    assert "i.geocode_qualifier is null" in pred               # wide_area / unanchored pins do not vote
+    agg = " ".join(_score.HOTSPOT_AGG_SQL.lower().split())
+    assert pred in agg and "interval '6 months'" in agg          # applied inside the escalation window
+    assert "count(distinct st_astext(i.geom::geometry))" in agg  # distinct points recorded
+
+
+def test_escalation_flag_and_precision_label():
+    esc = {"min_incidents": 3, "window_months": 6}
+    assert _score.escalation_flag(3, esc) is True and _score.escalation_flag(2, esc) is False
+    assert _score.location_precision(3) == "point"
+    assert _score.location_precision(2) == "feature" and _score.location_precision(None) == "feature"
