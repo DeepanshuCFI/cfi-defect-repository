@@ -23,6 +23,12 @@ def districts() -> list[dict]:
     return list(csv.DictReader(open(CONFIG_DIR / "config_districts_master.csv")))
 
 
+# Must match the CHECK on config_keyword.category (migrations 002, 016) and
+# scripts.load_configs.KEYWORD_CATEGORIES. query_defect = the defect terms used as
+# Google News search queries (16 Oct 2026), distinct from the long infra_defect list.
+KEYWORD_CATEGORIES = ("crash", "fatality", "injury", "crash_type", "infra_defect", "query_defect")
+
+
 @lru_cache(maxsize=1)
 def keywords() -> dict[str, dict[str, list[str]]]:
     """{lang: {category: [terms]}}"""
@@ -35,8 +41,7 @@ def keywords() -> dict[str, dict[str, list[str]]]:
                 out.setdefault(lang, {}).setdefault(cat, []).append(term)
         return out
     pack = json.load(open(CONFIG_DIR / "config_keyword_pack.json"))["languages"]
-    return {lang: {c: obj.get(c, []) for c in
-                   ("crash", "fatality", "injury", "crash_type", "infra_defect")}
+    return {lang: {c: obj.get(c, []) for c in KEYWORD_CATEGORIES}
             for lang, obj in pack.items()}
 
 

@@ -42,18 +42,36 @@ class FeedItem:
     resolved: bool
 
 
+DEFECT_QUERY_SLOTS = 2   # of the max_lang_terms primary-language slots, how many carry defect terms
+
+
 def build_queries(district_row: dict, kw: dict[str, dict[str, list[str]]],
-                  max_lang_terms: int = 3) -> list[tuple[str, str]]:
-    """[(query, lang)] — English starter + top primary-language crash terms."""
+                  max_lang_terms: int = 3,
+                  defect_slots: int = DEFECT_QUERY_SLOTS) -> list[tuple[str, str]]:
+    """[(query, lang)] — English starter, then primary-language terms: crash terms in
+    the first (max_lang_terms - defect_slots) slots, DEFECT terms in the rest.
+
+    Until 16 Oct 2026 every slot was a crash term. The 3.5-month funnel showed the
+    collection was aimed at the wrong class: articles carrying road-defect vocabulary
+    were 13% of what we collected but 68% of all published pins (pin rate 48% vs 7%),
+    and 87% of pins are casualty-free defect reports — stories the crash queries only
+    found when they happened to mention a crash word. Two of the three slots now carry
+    the per-language `query_defect` terms (falling back to the head of `infra_defect`),
+    so the query count per district — and the Google throttle profile — is unchanged.
+    English-primary districts get the English defect terms after their starter."""
     q: list[tuple[str, str]] = []
     starter = district_row["starter_query_en"].strip()
     if starter:
         q.append((starter, "en"))
     lang = district_row["primary_language"]
     name = district_row["query_name"]
+    terms = kw.get(lang, {})
+    defect = (terms.get("query_defect") or terms.get("infra_defect", []))[:defect_slots]
     if lang != "en":
-        for term in kw.get(lang, {}).get("crash", [])[:max_lang_terms]:
+        for term in terms.get("crash", [])[:max(0, max_lang_terms - len(defect))]:
             q.append((f'"{name}" {term}', lang))
+    for term in defect:
+        q.append((f'"{name}" {term}', lang))
     return q
 
 

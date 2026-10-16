@@ -1445,3 +1445,52 @@ def test_migration_adds_the_marker_column_index_and_backfill():
     assert "add column if not exists geocode_attempted_at timestamptz" in sql
     assert "create index if not exists" in sql and "where geom is null" in sql
     assert "update incident set geocode_attempted_at = now() where geom is null" in sql   # the tail counts as tried
+
+
+# ------------------------------------------------- defect-term queries (16 Oct 2026)
+# 3.5-month funnel: articles carrying road-defect vocabulary were 13% of the collection
+# but 68% of all published pins (pin rate 48% vs 7%), and 87% of pins are casualty-free
+# defect reports — yet every one of the 584 daily queries was a CRASH query. Two of the
+# three primary-language slots now carry defect terms; the English starter stays.
+import json as _json  # noqa: E402
+
+from pipeline.collectors import rss as _rss  # noqa: E402
+
+_KW = {"en": {"crash": ["road accident", "accident"], "infra_defect": ["pothole", "no signage"],
+              "query_defect": ["potholes", "waterlogging"]},
+       "hi": {"crash": ["सड़क दुर्घटना", "दुर्घटना", "हादसा"], "infra_defect": ["गड्ढा", "गड्ढे", "जलभराव"],
+              "query_defect": ["गड्ढे", "जलभराव"]}}
+_HI = {"query_name": "Bhadohi", "primary_language": "hi", "starter_query_en": '"Bhadohi" road accident'}
+
+
+def test_hindi_district_gets_one_crash_and_two_defect_queries_in_four_slots():
+    q = _rss.build_queries(_HI, _KW, max_lang_terms=3)
+    assert q == [('"Bhadohi" road accident', "en"),
+                 ('"Bhadohi" सड़क दुर्घटना', "hi"),
+                 ('"Bhadohi" गड्ढे', "hi"),
+                 ('"Bhadohi" जलभराव', "hi")]
+    assert len(q) == 4                       # same query count as before: Google throttle profile unchanged
+
+
+def test_defect_queries_fall_back_to_the_infra_defect_list():
+    kw = {"hi": {"crash": ["सड़क दुर्घटना", "दुर्घटना"], "infra_defect": ["गड्ढा", "गड्ढे", "जलभराव"]}}
+    q = _rss.build_queries(_HI, kw, max_lang_terms=3)
+    assert [t for t, _ in q][1:] == ['"Bhadohi" सड़क दुर्घटना', '"Bhadohi" गड्ढा', '"Bhadohi" गड्ढे']
+
+
+def test_english_district_gets_defect_queries_too():
+    row = {"query_name": "Goa", "primary_language": "en", "starter_query_en": '"Goa" road accident'}
+    q = _rss.build_queries(row, _KW, max_lang_terms=3)
+    assert q == [('"Goa" road accident', "en"), ('"Goa" potholes', "en"), ('"Goa" waterlogging', "en")]
+
+
+def test_query_defect_is_a_known_keyword_category_everywhere():
+    # the CHECK on config_keyword.category, both loaders and the pack must agree, or the
+    # CI "Sync configs to DB" step aborts on the first new term (the migration-014 lesson)
+    import scripts.load_configs as lc
+    from pipeline import configload
+    pack = _json.load(open(configload.CONFIG_DIR / "config_keyword_pack.json"))["languages"]
+    assert all(len(pack[l].get("query_defect", [])) == 2 for l in ("hi", "en", "mr")), "2 defect query terms per language"
+    assert "query_defect" in lc.KEYWORD_CATEGORIES and "query_defect" in configload.KEYWORD_CATEGORIES
+    mig = (configload.CONFIG_DIR.parent / "migrations" / "016_query_defect_keywords.sql").read_text()
+    assert "'query_defect'" in mig and "config_keyword" in mig
