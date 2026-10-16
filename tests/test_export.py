@@ -35,7 +35,13 @@ class _Cur:
         if "config_defect_taxonomy" in q:
             return [("potholes_or_broken_surface", "Potholes / broken surface")]
         if "public_hotspot" in q:
-            return []
+            # one feature-level hotspot (road with repeat crashes) and one point-level
+            return [(1, 82.5, 25.4, "Sandi-Hardoi Road", "Uttar Pradesh", "Hardoi", None, 5, 2, 7,
+                     date(2026, 7, 1), date(2026, 9, 30), ["potholes_or_broken_surface"], 61.0,
+                     {"location_precision": "feature", "raw": {"distinct_points": 1}}, True, "open"),
+                    (2, 82.6, 25.5, "Station Road", "Uttar Pradesh", "Hardoi", None, 3, 1, 2,
+                     date(2026, 8, 1), date(2026, 9, 1), [], 40.0,
+                     {"location_precision": "point", "raw": {"distinct_points": 3}}, True, "open")]
         if "public_incident_defect" in q:
             if "incident_id=%s" in q:                     # legacy per-incident shape
                 return [("potholes_or_broken_surface", 0.9, "a crater")]
@@ -94,3 +100,10 @@ def test_attach_children_groups_by_incident_and_keeps_source_order():
     assert out[1]["sources"] == [{"url": "https://a", "outlet": "A", "date": "2026-01-01"},
                                  {"url": "https://b", "outlet": "B", "date": None}]
     assert out[2]["defects"] == [] and out[2]["sources"] == []
+
+
+def test_hotspot_export_carries_the_location_precision_label(monkeypatch, tmp_path):
+    _run(monkeypatch, tmp_path, 1)
+    feats = json.loads((tmp_path / "hotspots.geojson").read_text())["features"]
+    assert [f["properties"]["location_precision"] for f in feats] == ["feature", "point"]
+    assert all(f["properties"]["escalation"] for f in feats)

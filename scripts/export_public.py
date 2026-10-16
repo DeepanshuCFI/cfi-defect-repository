@@ -97,6 +97,9 @@ def main() -> None:
                     "tier": tier_of(score, tiers),
                     "breakdown": breakdown, "escalation": esc, "status": status,
                     "evidence": evidence_class(n, esc),
+                    # 'point' = >= 3 distinct coordinates behind the flag; 'feature' = a
+                    # named road/landmark with repeat crashes (16 Oct 2026, see score.py)
+                    "location_precision": (breakdown or {}).get("location_precision", "feature"),
                 }})
         (OUT / "hotspots.geojson").write_text(json.dumps(
             {"type": "FeatureCollection", "features": feats}, ensure_ascii=False))
