@@ -28,6 +28,8 @@ class _Cur:
         self._last = self.calls[-1]
 
     def fetchone(self):
+        if "priority_tier_quantiles" in self._last:
+            return ({"critical": 0.05, "high": 0.15, "medium": 0.40},)
         return (TIERS,)
 
     def fetchall(self):
@@ -38,7 +40,7 @@ class _Cur:
             # one feature-level hotspot (road with repeat crashes) and one point-level
             return [(1, 82.5, 25.4, "Sandi-Hardoi Road", "Uttar Pradesh", "Hardoi", None, 5, 2, 7,
                      date(2026, 7, 1), date(2026, 9, 30), ["potholes_or_broken_surface"], 61.0,
-                     {"location_precision": "feature", "raw": {"distinct_points": 1}}, True, "open"),
+                     {"location_precision": "feature", "raw": {"distinct_points": 1, "records_total": 99, "records_public": 5, "hidden_casualty_crashes_6mo": 40}}, True, "open"),
                     (2, 82.6, 25.5, "Station Road", "Uttar Pradesh", "Hardoi", None, 3, 1, 2,
                      date(2026, 8, 1), date(2026, 9, 1), [], 40.0,
                      {"location_precision": "point", "raw": {"distinct_points": 3}}, True, "open")]
@@ -107,3 +109,15 @@ def test_hotspot_export_carries_the_location_precision_label(monkeypatch, tmp_pa
     feats = json.loads((tmp_path / "hotspots.geojson").read_text())["features"]
     assert [f["properties"]["location_precision"] for f in feats] == ["feature", "point"]
     assert all(f["properties"]["escalation"] for f in feats)
+
+
+def test_hotspot_export_tiers_by_quantile_and_states_what_is_hidden(monkeypatch, tmp_path):
+    _run(monkeypatch, tmp_path, 1)
+    feats = json.loads((tmp_path / "hotspots.geojson").read_text())["features"]
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert meta["tiers"]["critical"] >= meta["tiers"]["high"] >= meta["tiers"]["medium"] >= 0
+    assert meta["tiers"]["critical"] == 61.0 and meta["tier_rule"].startswith("quantiles")   # top score is the cut of two
+    assert [f["properties"]["tier"] for f in feats] == ["critical", "watch"]   # with two scores every cut is the top one
+    p = feats[0]["properties"]
+    assert (p["records_public"], p["records_hidden"], p["hidden_casualty_crashes_6mo"]) == (5, 94, 40)
+    assert feats[1]["properties"]["records_hidden"] == 0                         # no raw -> nothing hidden

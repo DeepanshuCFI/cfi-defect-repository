@@ -47,21 +47,92 @@ VULNERABLE = {"pedestrian", "cyclist", "two_wheeler"}
 ESCALATION_INCIDENT_SQL = "(i.fatalities > 0 or i.injuries > 0) and i.geocode_qualifier is null"
 POINT_PRECISION_MIN_DISTINCT = 3
 
-# LEFT JOIN from hotspot (hotspots with no incidents still score — see run()); params:
-# (today, today, VULNERABLE, today, today).
+# Scoring inputs come from PUBLIC members only (launch review, 16 Oct 2026). The score
+# and tier used to be computed over every record clustered at a location — including
+# the two thirds that are crash-only and never publish — while the dossier showed only
+# the public rows. Readers saw "5 reports, 0 deaths, Critical 95.7" at the top of the
+# rankings because the score rested on rows they could not see. Now:
+#   - casualties, frequency, recency, vulnerable share, geocode confidence, sources and
+#     defect severity are aggregated over public members (pi.id is not null);
+#   - frequency and recency use a REPORT date every row has — crash_date when known,
+#     else the article's published date, else the row's created date — because 85% of
+#     public entries are casualty-free defect reports with no crash date;
+#   - records_total / records_public / hidden_casualty_crashes_6mo ride in the
+#     breakdown so the dossier can say "also N crash records here not shown publicly";
+#   - the escalation flag is unchanged: it votes over all casualty crashes on tight
+#     pins (the unpublished crash records ARE the repeat-crash evidence).
+# LEFT JOIN from hotspot (hotspots with no incidents still score — see run()); params
+# from agg_params(today).
+REPORT_DATE_SQL = "coalesce(i.crash_date, a.published_at::date, i.created_at::date)"
 HOTSPOT_AGG_SQL = f"""
-  select h.id, coalesce(sum(i.fatalities),0), coalesce(sum(i.injuries),0),
-         count(i.id) filter (where i.crash_date >= %s::date - interval '6 months'),
-         %s::date - max(i.crash_date),
-         avg(case when i.victim_types && %s::text[] then 1.0 else 0.0 end),
-         avg(i.geocode_confidence),
+  select h.id,
+         coalesce(sum(i.fatalities) filter (where pi.id is not null), 0),
+         coalesce(sum(i.injuries) filter (where pi.id is not null), 0),
+         count(i.id) filter (where pi.id is not null
+                               and {REPORT_DATE_SQL} >= %s::date - interval '6 months'),
+         %s::date - max({REPORT_DATE_SQL}) filter (where pi.id is not null),
+         avg(case when i.victim_types && %s::text[] then 1.0 else 0.0 end)
+             filter (where pi.id is not null),
+         avg(i.geocode_confidence) filter (where pi.id is not null),
          count(i.id) filter (where i.crash_date >= %s::date - interval '6 months'
                                and {ESCALATION_INCIDENT_SQL}),
          count(distinct ST_AsText(i.geom::geometry))
                filter (where i.crash_date >= %s::date - interval '6 months'
-                         and {ESCALATION_INCIDENT_SQL})
-  from hotspot h left join incident i on i.cluster_id = h.id
+                         and {ESCALATION_INCIDENT_SQL}),
+         count(i.id),
+         count(i.id) filter (where pi.id is not null),
+         count(i.id) filter (where pi.id is null
+                               and i.crash_date >= %s::date - interval '6 months'
+                               and (i.fatalities > 0 or i.injuries > 0))
+  from hotspot h
+  left join incident i on i.cluster_id = h.id
+  left join public_incident pi on pi.id = i.id
+  left join source_article a on a.id = i.primary_source_id
   group by h.id"""
+
+
+def agg_params(today: date) -> tuple:
+    """Positional params for HOTSPOT_AGG_SQL, in order of its %s placeholders."""
+    return (today, today, list(VULNERABLE), today, today, today)
+
+
+# Evidence strength and defect severity: public members only, same reason.
+PUBLIC_SOURCES_SQL = """
+  select i2.cluster_id, count(distinct s.source_article_id)
+  from incident_source s
+  join public_incident i2 on i2.id = s.incident_id
+  where i2.cluster_id is not null group by i2.cluster_id"""
+
+PUBLIC_SEVERITY_SQL = """
+  select i.cluster_id, max(t.severity_weight)
+  from incident_defect d
+  join config_defect_taxonomy t on t.code = d.defect_type
+  join public_incident i on i.id = d.incident_id
+  where t.maps_to_defects and i.cluster_id is not null
+  group by i.cluster_id"""
+
+
+# Tiers are QUANTILES of the public score distribution, not fixed cut-offs: with fixed
+# thresholds 17% of locations were Critical and a third sat in the top two tiers, so the
+# badge told a reader nothing. Shares are cumulative from the top; the rest is watch.
+TIER_QUANTILES = {"critical": 0.05, "high": 0.15, "medium": 0.40}
+FIXED_TIERS_FALLBACK = {"critical": 75.0, "high": 50.0, "medium": 25.0, "watch": 0.0}
+
+
+def quantile_thresholds(scores, quantiles: dict | None = None) -> dict:
+    """Score cut-offs such that the top `critical` share is critical, the top `high`
+    share is at least high, the top `medium` share at least medium (pure, unit-tested).
+    Ties at a cut all qualify. Empty input falls back to the fixed thresholds."""
+    q = quantiles or TIER_QUANTILES
+    s = sorted((float(x) for x in scores if x is not None), reverse=True)
+    if not s:
+        return dict(FIXED_TIERS_FALLBACK)
+
+    def cut(share: float) -> float:
+        k = max(1, math.ceil(float(share) * len(s)))
+        return s[min(k, len(s)) - 1]
+    return {"critical": cut(q["critical"]), "high": cut(q["high"]),
+            "medium": cut(q["medium"]), "watch": 0.0}
 
 
 def escalation_flag(esc_incidents_6mo: int, esc_cfg: dict) -> bool:
@@ -135,40 +206,42 @@ def run(today: date | None = None) -> dict:
     esc = cfg["escalation_rule"]
     today = today or date.today()
     with connect() as conn, conn.cursor() as cur:
-        cur.execute(HOTSPOT_AGG_SQL, (today, today, list(VULNERABLE), today, today))
+        cur.execute(HOTSPOT_AGG_SQL, agg_params(today))
         agg = {r[0]: r[1:] for r in cur.fetchall()}
-
-        cur.execute("""
-          select i2.cluster_id, count(distinct s.source_article_id)
-          from incident_source s join incident i2 on i2.id = s.incident_id
-          where i2.cluster_id is not null group by i2.cluster_id""")
+        cur.execute(PUBLIC_SOURCES_SQL)
         sources = dict(cur.fetchall())
-
-        cur.execute("""
-          select i.cluster_id, max(t.severity_weight)
-          from incident_defect d
-          join config_defect_taxonomy t on t.code = d.defect_type
-          join incident i on i.id = d.incident_id
-          where t.maps_to_defects and i.cluster_id is not null
-          group by i.cluster_id""")
+        cur.execute(PUBLIC_SEVERITY_SQL)
         severity = dict(cur.fetchall())
 
-        ids, scores, breakdowns, escalates = [], [], [], []
-        for hid, (fat, inj, inc6, days_last, vuln, gconf, esc6, pts) in agg.items():
+        rows = []
+        for hid, (fat, inj, inc6, days_last, vuln, gconf, esc6, pts,
+                  n_total, n_public, hidden_cas) in agg.items():
             raw = {"fatalities": int(fat), "injuries": int(inj), "inc_6mo": int(inc6),
                    "days_since_last": days_last if days_last is None else int(days_last),
                    "vulnerable_share": float(vuln or 0),
                    "max_severity": float(severity.get(hid) or 0),
                    "n_sources": int(sources.get(hid, 0)),
                    "avg_geocode_conf": float(gconf or 0),
-                   "esc_incidents_6mo": int(esc6), "distinct_points": int(pts)}
+                   "esc_incidents_6mo": int(esc6), "distinct_points": int(pts),
+                   "records_total": int(n_total), "records_public": int(n_public),
+                   "hidden_casualty_crashes_6mo": int(hidden_cas)}
             comp = components(raw, cfg)
-            score = total_score(comp, weights)
+            rows.append((hid, raw, comp, total_score(comp, weights)))
+
+        # tiers: quantiles of the PUBLIC score distribution (hotspots with >= 1 public
+        # record are the ones the map shows); non-public hotspots take the same cuts
+        thresholds = quantile_thresholds(
+            [sc for _, raw, _, sc in rows if raw["records_public"] > 0],
+            cfg.get("priority_tier_quantiles"))
+
+        ids, scores, breakdowns, escalates = [], [], [], []
+        for hid, raw, comp, score in rows:
             ids.append(hid)
             scores.append(score)
             breakdowns.append(json.dumps({
                 "raw": raw, "components": {k: round(v, 4) for k, v in comp.items()},
-                "weights": weights, "tier": tier(score, cfg["priority_tiers"]),
+                "weights": weights, "tier": tier(score, thresholds),
+                "tier_thresholds": thresholds,
                 "location_precision": location_precision(raw["distinct_points"]),
                 "computed_for": str(today)}))
             escalates.append(escalation_flag(raw["esc_incidents_6mo"], esc))
