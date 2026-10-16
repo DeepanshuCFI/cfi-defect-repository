@@ -217,12 +217,18 @@ def collect_district(d: dict, store, args) -> dict:
     dcfg = configload.settings().get("dedup", {})
     ham_max = dcfg.get("simhash_hamming_max", 3)
     stats = {"queries": 0, "items": 0, "new": 0, "dup_url": 0, "near_dup": 0,
-             "robots": 0, "errors": 0}
+             "robots": 0, "errors": 0, "blocked": 0}
+    # outlets measured at 3-5 pins per 1,000 articles (see rss.blocked_domain) are
+    # dropped at the feed, before the resolver round-trip and the fetch
+    blocked = (configload.settings().get("ingestion", {}) or {}).get("blocked_domains") or []
+    skip = (lambda dom: rss.blocked_domain(dom, blocked)) if blocked else None
     for query, lang in rss.build_queries(d, kw, max_lang_terms=args.lang_terms):
         stats["queries"] += 1
         try:
+            before_blocked = rss.STATS.get("blocked_outlet", 0)
             items = rss.collect(query, lang, days=args.days,
-                                max_items=args.max_per_query, resolve=True)
+                                max_items=args.max_per_query, resolve=True, skip=skip)
+            stats["blocked"] += rss.STATS.get("blocked_outlet", 0) - before_blocked
         except Exception as e:
             print(f"  WARN rss failed [{query}]: {e}")
             stats["errors"] += 1

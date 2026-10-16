@@ -1551,3 +1551,45 @@ def test_yield_floors_are_configured_defaults_and_in_the_settings_file():
     assert _health.DEFAULTS["min_defect_vocab_share_7d"] == 0.05
     h = _j.load(open(configload.CONFIG_DIR / "config_settings.json"))["settings"]["health"]
     assert h["min_yield_per_1000_7d"] == 10 and h["min_defect_vocab_share_7d"] == 0.05
+# ------------------------------------------------- outlet blocklist (step 4, 16 Oct 2026)
+# 3.5-month yield by outlet: ETV Bharat 5.0, News18 Hindi 3.5, Navbharat Times 2.7, ABP
+# News 4.4, News4Nation 4.5 pins per 1,000 articles against 40 overall — 3.9% of the
+# collection for 0.4% of the pins. Items from blocked domains are dropped at the feed,
+# before the URL resolver round-trip and the fetch.
+def test_blocked_domain_matches_host_and_subdomains_case_insensitively():
+    bl = ["etvbharat.com", "hindi.news18.com"]
+    assert _rss.blocked_domain("www.etvbharat.com", bl) and _rss.blocked_domain("ETVBharat.com", bl)
+    assert _rss.blocked_domain("odisha.etvbharat.com", bl)
+    assert _rss.blocked_domain("hindi.news18.com", bl) and not _rss.blocked_domain("www.news18.com", bl)
+    assert not _rss.blocked_domain(None, bl) and not _rss.blocked_domain("bhaskar.com", bl)
+    assert not _rss.blocked_domain("www.etvbharat.com", [])
+
+
+def test_collect_skips_blocked_outlets_before_resolving(monkeypatch):
+    xml = ('<rss><channel>'
+           '<item><title>a</title><link>https://news.google.com/rss/articles/A</link>'
+           '<source url="https://www.etvbharat.com">ETV Bharat</source></item>'
+           '<item><title>b</title><link>https://news.google.com/rss/articles/B</link>'
+           '<source url="https://www.bhaskar.com">Dainik Bhaskar</source></item>'
+           '</channel></rss>')
+
+    class _Resp:
+        text = xml
+        def raise_for_status(self): pass
+    monkeypatch.setattr(_rss.httpx, "get", lambda *a, **kw: _Resp())
+    resolved = []
+    monkeypatch.setattr(_rss, "resolve_url",
+                        lambda gurl, client: (resolved.append(gurl) or (gurl.replace("rss/articles/", "pub/"), True)))
+    before = _rss.STATS.get("blocked_outlet", 0)
+    items = _rss.collect("q", "hi", skip=lambda d: _rss.blocked_domain(d, ["etvbharat.com"]))
+    assert [i.source_name for i in items] == ["Dainik Bhaskar"]
+    assert resolved == ["https://news.google.com/rss/articles/B"]   # the blocked item cost no resolver call
+    assert _rss.STATS["blocked_outlet"] == before + 1
+
+
+def test_blocklist_is_configured_with_its_evidence():
+    from pipeline import configload
+    ing = _json.load(open(configload.CONFIG_DIR / "config_settings.json"))["settings"]["ingestion"]
+    assert set(ing["blocked_domains"]) >= {"etvbharat.com", "hindi.news18.com", "navbharattimes.indiatimes.com",
+                                           "abplive.com", "news4nation.com"}
+    assert "pins per 1,000" in ing["blocked_domains_note"]
