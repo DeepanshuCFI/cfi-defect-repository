@@ -48,6 +48,15 @@ def tier_of(score, tiers):
     return "watch"
 
 
+def group_by_hotspot(incidents: list[dict], hotspot_ids) -> dict:
+    """{hotspot_id: [incident, ...]} for every id in hotspot_ids (pure, unit-tested).
+    Members keep the exporter's incident shape; hotspots without members get []."""
+    out = {hid: [] for hid in hotspot_ids}
+    for inc in incidents:
+        out.setdefault(inc["hotspot_id"], []).append(inc)
+    return out
+
+
 def attach_children(incidents: list[dict], defect_rows, source_rows, labels: dict) -> list[dict]:
     """Group bulk-fetched defects and sources onto their incidents (pure, unit-tested).
 
@@ -79,6 +88,13 @@ def main() -> None:
             all(0 < float(v) <= 1 for v in row[0].values()) else None
         cur.execute("""select code, label from config_defect_taxonomy""")
         labels = dict(cur.fetchall())
+        # what the collector actually covers today — so the map can say it, instead of
+        # letting an empty state read as a safe one (launch review, 16 Oct 2026)
+        cur.execute("select value from config_setting where key='ingestion'")
+        row = cur.fetchone()
+        states = (row[0] or {}).get("daily_states", []) if row else []
+        cur.execute("select count(*) from config_district where enabled and state = any(%s)", (states,))
+        coverage = {"states": states, "districts": int(cur.fetchone()[0])}
 
         # ---- hotspots (public members only) -> GeoJSON
         cur.execute("""
@@ -151,6 +167,26 @@ def main() -> None:
         attach_children(incidents, defect_rows, source_rows, labels)
         (OUT / "incidents.json").write_text(json.dumps(incidents, ensure_ascii=False))
 
+        # Per-hotspot member files (launch review, 16 Oct 2026): the map page used to
+        # fetch and parse the whole incidents.json (10.6 MB raw, 2.1 MB compressed) on
+        # every visit so the dossier could filter it by hotspot. Now the dossier fetches
+        # data/incidents/<hotspot_id>.json on open; the page loads hotspots + meta only.
+        # Every public hotspot gets a file (empty list if it somehow has no members) so
+        # the frontend never sees a 404. Stale files from merged hotspots are removed.
+        inc_dir = OUT / "incidents"
+        inc_dir.mkdir(parents=True, exist_ok=True)
+        for stale in inc_dir.glob("*.json"):
+            stale.unlink()
+        by_hotspot = group_by_hotspot(incidents, [f["properties"]["id"] for f in feats])
+        for hid, members in by_hotspot.items():
+            (inc_dir / f"{hid}.json").write_text(json.dumps(members, ensure_ascii=False))
+        # road types per hotspot, so the road-type filter needs no incident file
+        for f in feats:
+            f["properties"]["road_types"] = sorted({m["road_type"] for m in by_hotspot.get(f["properties"]["id"], [])
+                                                     if m.get("road_type")})
+        (OUT / "hotspots.geojson").write_text(json.dumps(
+            {"type": "FeatureCollection", "features": feats}, ensure_ascii=False))
+
         meta = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "hotspots": len(feats),
@@ -158,8 +194,11 @@ def main() -> None:
                                    if f["properties"]["evidence"] == c)
                             for c in ("escalation", "repeat", "single")},
             "incidents": len(incidents),
+            "with_casualties": sum(1 for i in incidents if (i["fatalities"] or 0) > 0 or (i["injuries"] or 0) > 0),
             "fatalities": sum(i["fatalities"] for i in incidents),
             "injuries": sum(i["injuries"] for i in incidents),
+            "road_types": sorted({i["road_type"] for i in incidents if i.get("road_type")}),
+            "coverage": coverage,
             "states": sorted({f["properties"]["state"] for f in feats
                               if f["properties"]["state"]}),
             "defect_labels": labels,
@@ -168,7 +207,8 @@ def main() -> None:
                 f"{k} = top {int(v * 100)}%" for k, v in (quantiles or {"critical": .05, "high": .15, "medium": .40}).items()),
         }
         (OUT / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
-    print(f"exported: {len(feats)} hotspots · {len(incidents)} incidents -> {OUT}")
+    print(f"exported: {len(feats)} hotspots · {len(incidents)} incidents · "
+          f"{len(by_hotspot)} per-hotspot files -> {OUT}")
 
 
 if __name__ == "__main__":
