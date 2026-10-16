@@ -58,7 +58,15 @@
       "national_share_cap": 0.1,
       "rss_results_per_query": 30,
       "fetch_timeout_s": 30,
-      "per_domain_delay_s": 2.0
+      "per_domain_delay_s": 2.0,
+      "blocked_domains": [
+        "etvbharat.com",
+        "hindi.news18.com",
+        "navbharattimes.indiatimes.com",
+        "abplive.com",
+        "news4nation.com"
+      ],
+      "blocked_domains_note": "Dropped at the feed before URL resolution and fetch. Measured 4 Jul-16 Oct 2026, pins per 1,000 articles vs 40 overall: ETV Bharat 5.0 (2,380 articles), News18 Hindi 3.5 (1,731), Navbharat Times 2.7 (1,104), ABP News 4.4 (459), News4Nation 4.5 (446) - together 3.9% of the collection and 0.4% of the pins. Kept at 9-10 per 1,000: Patrika, Bhaskar English, newstrack. Re-measure with health yield_7d before adding or removing a domain."
     },
     "models": {
       "relevance": "claude-haiku-4-5-20251001",

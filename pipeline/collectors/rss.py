@@ -122,7 +122,7 @@ DECODE_TIMEOUT_S = 30.0      # socket default during a decode (honoured by urlli
 DECODE_DEADLINE_S = 90.0     # hard wall-clock bound on the whole decode call, library-agnostic
 
 STATS = {"hit_disk": 0, "hit_mem": 0, "decoded_b64": 0, "ok": 0,
-         "failed": 0, "skipped_throttled": 0}
+         "failed": 0, "skipped_throttled": 0, "blocked_outlet": 0}
 
 _resolve_cache: dict[str, tuple[str, bool]] = {}
 _disk: dict[str, str] | None = None
@@ -271,8 +271,28 @@ def _remember(google_url: str, publisher_url: str) -> None:
         save_cache()
 
 
+def blocked_domain(domain: str | None, blocklist) -> bool:
+    """True when a feed item's source domain is, or sits under, a blocked domain.
+
+    Outlet blocklist (16 Oct 2026, config ingestion.blocked_domains): 3.5-month yield
+    showed a handful of outlets at 3-5 pins per 1,000 articles against 40 overall —
+    3.9% of the collection for 0.4% of the pins. Blocked items are dropped at the feed,
+    before the Google URL resolver round-trip and the fetch, so the saving is resolver
+    quota and fetch time as well as LLM budget."""
+    if not domain:
+        return False
+    d = domain.lower().removeprefix("www.")
+    for b in blocklist or ():
+        b = b.lower().removeprefix("www.")
+        if d == b or d.endswith("." + b):
+            return True
+    return False
+
+
 def collect(query: str, lang: str, days: int = 7, max_items: int = 30,
-            resolve: bool = True) -> list[FeedItem]:
+            resolve: bool = True, skip=None) -> list[FeedItem]:
+    """skip: optional predicate on the item's source domain; True drops the item before
+    it is resolved (counted in STATS['blocked_outlet'])."""
     # Google blocks feedparser's own fetcher — fetch with a browser UA, parse the text.
     r = httpx.get(rss_url(query, lang, days), timeout=20, follow_redirects=True,
                   headers={"User-Agent": UA})
@@ -285,12 +305,16 @@ def collect(query: str, lang: str, days: int = 7, max_items: int = 30,
         for e in feed.entries[:max_items]:
             gurl = e.get("link", "")
             src = e.get("source", {}) or {}
+            domain = urllib.parse.urlparse(src.get("href", "")).netloc or None
+            if skip is not None and skip(domain):
+                STATS["blocked_outlet"] = STATS.get("blocked_outlet", 0) + 1
+                continue
             url, ok = resolve_url(gurl, client) if resolve else (gurl, False)
             items.append(FeedItem(
                 url=url, google_url=gurl, title=e.get("title", ""),
                 published_at=e.get("published"),
                 source_name=src.get("title"),
-                source_domain=urllib.parse.urlparse(src.get("href", "")).netloc or None,
+                source_domain=domain,
                 query=query, language=lang, resolved=ok))
     finally:
         if client is not None:
