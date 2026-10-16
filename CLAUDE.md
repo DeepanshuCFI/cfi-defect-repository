@@ -41,6 +41,7 @@ Per hotspot 0–100 from: fatalities-weighted casualties (w1=.30), crash frequen
 ## Working style for this repo
 - Build in thin vertical slices (spec §11). After each phase, print a short status + how to verify it.
 - Never hard-code secrets. Use `.env` (`ANTHROPIC_API_KEY`, `DATABASE_URL`/`SUPABASE_URL`+`SUPABASE_KEY`, `MAPBOX_TOKEN`).
+- **Inference runs on the owner's Claude subscription (`LLM_BACKEND=cli`, the CI default).** The API key exists for owner-approved one-off burns only. Never make the API the default, add an API-backed stage, or raise `llm_budget_usd_per_day` without the owner's explicit go for that specific run — state the cap first (owner's rule, 16 Oct 2026; Move 2 costed at ~$65–130/month and declined).
 - Sample-check outputs (eyeball ≥50 extractions) before scaling ingestion.
 - Keep the defect taxonomy and priority weights in `config/`, not in code.
 - Write tests for: dedup logic, clustering, priority scoring, confidence gate.
