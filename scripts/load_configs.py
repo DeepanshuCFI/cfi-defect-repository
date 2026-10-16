@@ -28,12 +28,17 @@ def read_districts() -> list[dict]:
     return rows
 
 
+# Must match the CHECK on config_keyword.category (migrations 002, 016) and
+# pipeline.configload.KEYWORD_CATEGORIES.
+KEYWORD_CATEGORIES = ("crash", "fatality", "injury", "crash_type", "infra_defect", "query_defect")
+
+
 def read_keywords() -> list[tuple]:
     pack = json.load(open(CONFIG_DIR / "config_keyword_pack.json"))
     out = []
     for lang, obj in pack["languages"].items():
         assert lang in VALID_LANGS, f"unknown language in keyword pack: {lang}"
-        for cat in ("crash", "fatality", "injury", "crash_type", "infra_defect"):
+        for cat in KEYWORD_CATEGORIES:
             for term in obj.get(cat, []):
                 assert term.strip(), f"blank term in {lang}.{cat}"
                 out.append((lang, cat, term.strip()))
