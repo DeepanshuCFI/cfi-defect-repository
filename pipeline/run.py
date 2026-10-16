@@ -9,6 +9,7 @@ Examples:
 Storage: Postgres if DATABASE_URL is set, else data/source_article.jsonl (--jsonl forces file mode).
 """
 import argparse
+import hashlib
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -203,6 +204,60 @@ def mark_geocode_attempted(cur, ids) -> None:
         cur.execute("update incident set geocode_attempted_at = now() where id = any(%s)", (ids,))
 
 
+# ------------------------------------------------------------ district cadence
+# 3.5-month funnel (16 Oct 2026): yield per district ranged 135 -> 0 pins per 1,000
+# articles with no clean cut-off: the top-10 districts gave 19% of pins, the bottom
+# half still 23%, only one district gave nothing. So districts are not pruned; they are
+# queried on a cadence by recent yield: top third daily, middle third every other day,
+# bottom third every third day. Each class is spread across days (hash of the district)
+# so the daily query count stays even, and a district's collection window grows with
+# its cadence (when:2d -> when:3d) so no story falls between two queries. Districts
+# with too few recent articles to rate, new ones included, run daily.
+CADENCE_WINDOW_DAYS = 60
+CADENCE_MIN_ARTICLES = 100
+
+DISTRICT_YIELD_SQL = f"""
+  with a as (select state, district, count(*) n
+             from source_article
+             where created_at >= now() - interval '{CADENCE_WINDOW_DAYS} days'
+               and processing_status in ('fetched', 'extracted', 'irrelevant')
+             group by 1, 2),
+       p as (select sa.state, sa.district, count(*) pins
+             from incident i join source_article sa on sa.id = i.primary_source_id
+             where i.verification_status in ('auto_published', 'reviewed', 'verified')
+               and sa.created_at >= now() - interval '{CADENCE_WINDOW_DAYS} days'
+             group by 1, 2)
+  select a.state, a.district, a.n, coalesce(p.pins, 0)
+  from a left join p on p.state = a.state and p.district = a.district"""
+
+
+def district_yield_ranks(rows, min_articles: int = CADENCE_MIN_ARTICLES) -> dict:
+    """{(state, district): rank fraction in [0, 1) by pins per article, best first;
+    None for districts with fewer than min_articles recent articles (pure)."""
+    rated = sorted(((s, d, pins / n) for s, d, n, pins in rows if n >= min_articles),
+                   key=lambda r: -r[2])
+    out = {(s, d): i / len(rated) for i, (s, d, _) in enumerate(rated)}
+    for s, d, _n, _pins in rows:
+        out.setdefault((s, d), None)
+    return out
+
+
+def district_cadence(rank_fraction: float | None) -> int:
+    """Days between queries: 1 for the top third (and unrated), 2 middle, 3 bottom."""
+    if rank_fraction is None or rank_fraction < 1 / 3:
+        return 1
+    return 2 if rank_fraction < 2 / 3 else 3
+
+
+def district_due(cadence: int, day_ordinal: int, salt: str) -> bool:
+    """Every district runs exactly once per cadence cycle, offset by a stable hash so
+    one class does not all land on the same day."""
+    if cadence <= 1:
+        return True
+    h = int(hashlib.sha1(salt.encode("utf-8")).hexdigest()[:8], 16)
+    return (day_ordinal + h) % cadence == 0
+
+
 def tier_for(domain: str | None) -> str:
     if not domain:
         return "aggregator"
@@ -316,14 +371,36 @@ def cmd_collect(args) -> None:
             rows = [r for r in rows if r["state"].lower() == args.state.lower()]
         if not rows:
             raise SystemExit("no matching district/state in config_districts_master")
+        skipped = 0
+        if not args.district and not getattr(args, "all_districts", False) and not args.jsonl:
+            # cadence by recent yield (see district_cadence); --all-districts bypasses it
+            from pipeline.db import connect
+            with connect() as conn, conn.cursor() as cur:
+                cur.execute(DISTRICT_YIELD_SQL)
+                ranks = district_yield_ranks(cur.fetchall())
+            today = date.today().toordinal()
+            due = []
+            for d in rows:
+                cad = district_cadence(ranks.get((d["state"], d["district"])))
+                if district_due(cad, today, f"{d['state']}/{d['district']}"):
+                    due.append({**d, "_cadence": cad})
+                else:
+                    skipped += 1
+            print(f"cadence: {len(due)} of {len(rows)} district(s) due today; "
+                  f"{skipped} lower-yield district(s) wait for their turn")
+            rows = due
         print(f"collecting {len(rows)} district(s), window {args.days}d…")
         total: dict = {}
         for d in rows:
-            print(f"\n== {d['district']}, {d['state']} ({d['primary_language']})")
-            st = collect_district(d, store, args)
+            print(f"\n== {d['district']}, {d['state']} ({d['primary_language']})"
+                  + (f" [every {d['_cadence']} days]" if d.get("_cadence", 1) > 1 else ""))
+            d_args = argparse.Namespace(**vars(args))
+            d_args.days = max(args.days, d.get("_cadence", 1))   # the window covers the gap
+            st = collect_district(d, store, d_args)
             print(f"   {st}")
             for k, v in st.items():
                 total[k] = total.get(k, 0) + v
+        total["districts_skipped"] = skipped
         print(f"\nTOTAL {total}")
         print(f"resolver: {rss.STATS}")
         print("store counts:", store.counts())
@@ -982,6 +1059,8 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="pipeline.run")
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("collect", help="Phase 2 ingestion")
+    c.add_argument("--all-districts", action="store_true",
+                   help="ignore the yield cadence and query every district today")
     c.add_argument("--district")
     c.add_argument("--state")
     c.add_argument("--gdelt", help="comma-separated langs, e.g. en,hi")
