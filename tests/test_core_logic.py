@@ -1518,3 +1518,36 @@ def test_escalation_flag_and_precision_label():
     assert _score.escalation_flag(3, esc) is True and _score.escalation_flag(2, esc) is False
     assert _score.location_precision(3) == "point"
     assert _score.location_precision(2) == "feature" and _score.location_precision(None) == "feature"
+
+
+# ------------------------------------------------- yield metrics in health (step 6)
+# The 16 Oct 2026 funnel analysis had to be done by hand after 3.5 months. The two
+# numbers that say whether collection is aimed at the publishable class now ride in
+# the daily health check: pins per 1,000 articles (baseline 40) and the share of
+# articles carrying defect vocabulary (baseline 13%, producing 68% of pins).
+from pipeline.processing import health as _health  # noqa: E402
+
+
+def test_yield_per_1000_is_none_without_articles_and_rounds_otherwise():
+    assert _health.yield_per_1000(0, 0) is None
+    assert _health.yield_per_1000(63, 1575) == 40.0
+    assert _health.yield_per_1000(1, 3) == 333.3
+
+
+def test_defect_vocab_pattern_is_lowercase_escaped_and_multilingual():
+    kw = {"en": {"infra_defect": ["Pothole", "no signage (board)"], "crash": ["accident"]},
+          "hi": {"infra_defect": ["गड्ढे"]}}
+    import re as _re
+    pat = _health.defect_vocab_pattern(kw)
+    assert pat == "|".join(_re.escape(t) for t in ["no signage (board)", "pothole", "गड्ढे"])
+    assert _re.search(pat, "A POTHOLE on NH-28", _re.I) and _re.search(pat, "सड़क पर गड्ढे")
+    assert "accident" not in pat                         # crash terms are not defect vocabulary
+
+
+def test_yield_floors_are_configured_defaults_and_in_the_settings_file():
+    import json as _j
+    from pipeline import configload
+    assert _health.DEFAULTS["min_yield_per_1000_7d"] == 10
+    assert _health.DEFAULTS["min_defect_vocab_share_7d"] == 0.05
+    h = _j.load(open(configload.CONFIG_DIR / "config_settings.json"))["settings"]["health"]
+    assert h["min_yield_per_1000_7d"] == 10 and h["min_defect_vocab_share_7d"] == 0.05
