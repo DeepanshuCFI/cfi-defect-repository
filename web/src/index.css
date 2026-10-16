@@ -14,10 +14,17 @@
   --font-heading: "Montserrat", system-ui, sans-serif;
 }
 
+/* 100% rather than 100vh: on phones the browser chrome eats part of the viewport
+   and a 100vh app scrolls under it; the root chain sizes to the real window. */
+html, body, #root {
+  height: 100%;
+}
+
 body {
   font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   color: var(--color-foreground);
   -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
 }
 
 .maplibregl-popup-content {
@@ -26,6 +33,12 @@ body {
   box-shadow: 0 8px 24px rgb(74 53 255 / 0.12);
   font-size: 12.5px;
   padding: 10px 14px;
+}
+
+/* keep the zoom buttons clear of the floating search bar on phones */
+@media (max-width: 767px) {
+  .maplibregl-ctrl-top-right { top: 0; }
+  .maplibregl-ctrl-top-right .maplibregl-ctrl { margin: 12px 12px 0 0; }
 }
 
 @media print {
