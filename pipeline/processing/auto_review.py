@@ -93,6 +93,16 @@ def decide(verdict: dict, geocode_conf: float | None) -> str | None:
     return None
 
 
+def route_unresolved(geocode_conf: float | None, bar: float = 0.6) -> str:
+    """Where an item goes when decide() returns None (pure, unit-tested).
+
+    'needs_human' only when a human could actually publish it, i.e. the location bar
+    is met; otherwise 'archived' — terminal, never public, still rescuable by the
+    geocode rescue pass. 16 Oct 2026: 2,747 of 4,452 needs_human rows were below the
+    bar, a queue nobody worked (66 human actions in 3.5 months)."""
+    return "needs_human" if (geocode_conf or 0) >= bar else "archived"
+
+
 def pending_query(gate: dict, limit: int) -> tuple[str, tuple]:
     """The adjudication queue: rows that can PUBLISH first, then the rest; oldest
     first within each group.
@@ -133,7 +143,7 @@ def run(limit: int = 200) -> dict:
     from pipeline import configload
     from pipeline.db import connect
     stats = {"reviewed": 0, "auto_published": 0, "rejected": 0, "machine_ok": 0,
-             "left_for_human": 0, "errors": 0}
+             "left_for_human": 0, "archived": 0, "errors": 0}
     with connect() as conn, conn.cursor() as cur:
         cur.execute(*pending_query(configload.settings()["confidence_gate"], limit))
         rows = cur.fetchall()
@@ -173,18 +183,21 @@ def run(limit: int = 200) -> dict:
                 if cur.fetchone() is None:
                     action = None
             if action is None:
-                # adjudicate-once: flip to 'needs_human' so tomorrow's run doesn't pay
-                # to re-judge the same item; the review_queue view still shows it.
-                cur.execute("update incident set verification_status='needs_human', "
-                            "updated_at=now() where id=%s", (iid,))
+                # adjudicate-once: route out of 'auto' so tomorrow's run doesn't pay to
+                # re-judge the same item. Humans get it only if they could publish it
+                # (location bar met); below the bar it is archived — see route_unresolved.
+                dest = route_unresolved(gc)
+                cur.execute("update incident set verification_status=%s, "
+                            "updated_at=now() where id=%s", (dest, iid))
                 cur.execute("""insert into review_action (entity_type, entity_id, reviewer,
                                action, after_json, note) values ('incident',%s,
                                'pipeline:auto_review','edit',%s::jsonb,%s)""",
                             (iid, _json.dumps(verdict),
-                             f"auto-review -> needs_human (conf {verdict.get('confidence')}): "
+                             f"auto-review -> {dest} (conf {verdict.get('confidence')}"
+                             f"{'' if dest == 'needs_human' else ', geocode below publish bar'}): "
                              f"{verdict.get('reason','')[:150]}"))
                 conn.commit()
-                stats["left_for_human"] += 1
+                stats["left_for_human" if dest == "needs_human" else "archived"] += 1
                 continue
             cur.execute("update incident set verification_status=%s, updated_at=now() "
                         "where id=%s", (action, iid))

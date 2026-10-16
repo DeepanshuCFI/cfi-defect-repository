@@ -1635,3 +1635,34 @@ def test_district_yield_sql_uses_the_window_and_published_statuses():
     assert CADENCE_WINDOW_DAYS == 60 and f"interval '{CADENCE_WINDOW_DAYS} days'" in low
     assert "'auto_published'" in low and "'reviewed'" in low
     assert "processing_status in ('fetched', 'extracted', 'irrelevant')" in low   # articles with text only
+# ------------------------------------------------- review-queue policy (step 5, 16 Oct 2026)
+# 4,452 incidents sat in needs_human against 66 human actions in 3.5 months (60 by the
+# owner); 2,747 of them could never publish anyway because their location sits below
+# the 0.6 bar. The queue was where unpublishable rows went to die, and the adjudicator
+# paid to route them there. Unresolved verdicts now go to humans only when the location
+# bar is met; the rest, and any needs_human row untouched for 30 days, are 'archived' —
+# a terminal, never-public status the Mapbox rescue pass can still pull back to 'auto'.
+from pipeline.processing.auto_review import route_unresolved  # noqa: E402
+from pipeline.run import ARCHIVE_STALE_REVIEW_SQL, REVIEW_TTL_DAYS  # noqa: E402
+
+
+def test_unresolved_verdicts_go_to_humans_only_when_the_location_bar_is_met():
+    assert route_unresolved(0.8) == "needs_human" and route_unresolved(0.6) == "needs_human"
+    assert route_unresolved(0.55) == "archived" and route_unresolved(None) == "archived"
+
+
+def test_archived_rows_stay_rescuable_and_stale_reviews_expire():
+    sql, _ = geocode_rescue_query(10)
+    assert "'archived'" in sql.lower()                       # the rescue pass can still pull them back
+    low = " ".join(ARCHIVE_STALE_REVIEW_SQL.lower().split())
+    assert REVIEW_TTL_DAYS == 30 and f"interval '{REVIEW_TTL_DAYS} days'" in low
+    assert "set verification_status = 'archived'" in low and "verification_status = 'needs_human'" in low
+    assert "returning id" in low                              # hygiene audit-logs every row it archives
+
+
+def test_archived_is_a_known_status_and_never_public():
+    root = _P(__file__).resolve().parents[1] / "migrations"
+    mig = (root / "017_archived_status.sql").read_text()
+    assert "'archived'" in mig and "incident_verification_status_check" in mig
+    assert "'archived'" not in (root / "010_auto_publish_needs_defect.sql").read_text()   # public_incident view
+    assert "'archived'" not in (root / "008_needs_human_status.sql").read_text()          # review_queue view

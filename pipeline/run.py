@@ -191,7 +191,7 @@ def geocode_rescue_query(limit: int) -> tuple[str, tuple]:
                       i.verification_status
                from incident i
                left join source_article a on a.id = i.primary_source_id
-               where i.verification_status in ('auto','needs_human')
+               where i.verification_status in ('auto','needs_human','archived')
                  and (i.geocode_confidence is null or i.geocode_confidence < 0.6)
                order by i.geocode_attempted_at nulls first, i.id desc
                limit %s""", (limit,))
@@ -256,6 +256,17 @@ def district_due(cadence: int, day_ordinal: int, salt: str) -> bool:
         return True
     h = int(hashlib.sha1(salt.encode("utf-8")).hexdigest()[:8], 16)
     return (day_ordinal + h) % cadence == 0
+# ------------------------------------------------------------ review-queue TTL
+# 16 Oct 2026: 4,452 rows sat in needs_human against 66 human actions in 3.5 months.
+# A review nobody gets to in 30 days is not going to happen; the row is archived
+# (terminal, never public) with an audit row, and stays rescuable by the geocode
+# rescue pass. auto_review.route_unresolved stops the unpublishable ones arriving.
+REVIEW_TTL_DAYS = 30
+ARCHIVE_STALE_REVIEW_SQL = f"""
+  update incident set verification_status = 'archived', updated_at = now()
+  where verification_status = 'needs_human'
+    and updated_at < now() - interval '{REVIEW_TTL_DAYS} days'
+  returning id"""
 
 
 def tier_for(domain: str | None) -> str:
@@ -792,7 +803,7 @@ def cmd_geocode(args) -> None:
                            geocode_qualifier=%s where id=%s""",
                         (f"POINT({g['lon']} {g['lat']})", g["geocode_confidence"],
                          g["geocode_method"], g.get("geocode_qualifier"), iid))
-                    if g["geocode_confidence"] >= 0.6 and status == "needs_human":
+                    if g["geocode_confidence"] >= 0.6 and status in ("needs_human", "archived"):
                         cur.execute("update incident set verification_status='auto' "
                                     "where id=%s", (iid,))
                         cur.execute("""insert into review_action (entity_type, entity_id,
@@ -969,13 +980,24 @@ def cmd_daily(args) -> None:
             else:
                 print(f"  stranded TTL deferred: {stranded_waiting} real-URL 'new' rows still "
                       f"waiting for a first retry pass (> {RETRY_STRANDED_LIMIT}/run)")
+            # review-queue TTL — see ARCHIVE_STALE_REVIEW_SQL
+            cur.execute(ARCHIVE_STALE_REVIEW_SQL)
+            archived_ids = [row[0] for row in cur.fetchall()]
+            if archived_ids:
+                cur.execute("""insert into review_action (entity_type, entity_id, reviewer,
+                               action, note)
+                               select 'incident', unnest(%s::int[]), 'pipeline:hygiene', 'edit', %s""",
+                            (archived_ids, f"needs_human for over {REVIEW_TTL_DAYS} days with no "
+                                           "human action -> archived (rescue pass can requeue it)"))
+                print(f"  review TTL: {len(archived_ids)} stale needs_human row(s) archived")
             conn.commit()
         vc = connect()
         vc.autocommit = True
         vc.execute("vacuum source_article")
         vc.close()
         return {"raw_html_purged": purged, "expired_unresolved": expired,
-                "expired_stranded": expired_stranded, "stranded_waiting": stranded_waiting}
+                "expired_stranded": expired_stranded, "stranded_waiting": stranded_waiting,
+                "archived_stale_review": len(archived_ids)}
 
     from pipeline.processing import health
     stage("recompute", lambda: cmd_recompute(argparse.Namespace()))
