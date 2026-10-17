@@ -4,12 +4,12 @@ import MapView from './MapView.jsx'
 import Dossier from './Dossier.jsx'
 import Rankings from './Rankings.jsx'
 import Sheet from './Sheet.jsx'
-import { EVIDENCE_HINT, EVIDENCE_LABEL, ROAD_TYPE_LABEL, TIER_COLOR, TIER_HINT, TIER_LABEL, fmtDate, plural, isWaterloggingOnly } from './vocab.js'
+import { EVIDENCE_HINT, EVIDENCE_LABEL, ROAD_TYPE_LABEL, TIER_COLOR, TIER_HINT, TIER_LABEL, fmtDate, plural } from './vocab.js'
+import { EMPTY, FACETS, FILTER_LABEL, applyFilters, countWith, facetCounts, placeOnly, relaxations } from './filters.js'
 
 // Filters, tab, heat and selected location live in the URL so any view is a
 // citable link (?state=Rajasthan&tier=high, ?h=42, …).
 const initQ = new URLSearchParams(window.location.search)
-const EMPTY = { state: '', district: '', road: '', defect: '', tier: '', repeatOnly: false, hideWaterOnly: false }
 
 function useMedia(query) {
   const [m, setM] = useState(() => window.matchMedia(query).matches)
@@ -71,20 +71,23 @@ export default function App() {
     window.history.replaceState(null, '', qs ? `?${qs}` : window.location.pathname)
   }, [tab, filters, heat, selected])
 
-  const filtered = useMemo(() => {
-    if (!data) return []
-    return data.hs.features.filter(f => {
-      const p = f.properties
-      if (filters.state && p.state !== filters.state) return false
-      if (filters.district && p.district !== filters.district) return false
-      if (filters.defect && !(p.defects || []).includes(filters.defect)) return false
-      if (filters.tier && p.tier !== filters.tier) return false
-      if (filters.repeatOnly && p.incidents < 2) return false
-      if (filters.hideWaterOnly && isWaterloggingOnly(p.defects)) return false
-      if (filters.road && !(p.road_types || []).includes(filters.road)) return false
-      return true
-    })
-  }, [data, filters])
+  const filtered = useMemo(() => (data ? applyFilters(data.hs.features, filters) : []), [data, filters])
+
+  // Facets: for every dropdown, how many locations each option would leave given the
+  // OTHER active filters. Options that would leave none are not offered, so a stack of
+  // filters can no longer land on an empty map (17 Oct 2026: Gaya + NH + Critical + ...).
+  const facets = useMemo(() => {
+    if (!data) return null
+    const all = data.hs.features
+    const counts = Object.fromEntries(FACETS.map(k => [k, facetCounts(all, filters, k)]))
+    return {
+      counts,
+      repeat: countWith(all, filters, { repeatOnly: true }),
+      noWater: countWith(all, filters, { hideWaterOnly: true }),
+      relax: filtered.length ? [] : relaxations(all, filters),
+      placeCount: applyFilters(all, placeOnly(filters)).length,
+    }
+  }, [data, filters, filtered])
 
   // What the phone's list shows: the filtered locations inside the current map view.
   const inView = useMemo(() => {
@@ -109,24 +112,41 @@ export default function App() {
   )
 
   const { meta } = data
-  const districts = [...new Set(data.hs.features
-    .filter(f => !filters.state || f.properties.state === filters.state)
-    .map(f => f.properties.district).filter(Boolean))].sort()
-  const defectsInData = [...new Set(data.hs.features.flatMap(f => f.properties.defects || []))].sort()
-  const roadTypes = meta.road_types || [...new Set(data.hs.features.flatMap(f => f.properties.road_types || []))].sort()
+  const options = {
+    state: meta.states,
+    district: Object.keys(facets.counts.district).sort(),
+    road: meta.road_types || Object.keys(facets.counts.road).sort(),
+    defect: Object.keys(facets.counts.defect).sort(),
+    tier: ['critical', 'high', 'medium', 'watch'],
+  }
+  const valueLabels = {
+    state: {}, district: {}, road: ROAD_TYPE_LABEL, defect: meta.defect_labels,
+    tier: Object.fromEntries(Object.keys(TIER_LABEL).map(t => [t, `${TIER_LABEL[t]} — ${TIER_HINT[t]}`])),
+  }
   const coverage = meta.coverage || { states: meta.states, districts: null }
   const covered = coverage.states?.length ? data.hs.features.filter(f => coverage.states.includes(f.properties.state)) : data.hs.features
 
   const sel = (k, v) => setFilters(f => ({ ...f, [k]: v, ...(k === 'state' ? { district: '' } : {}) }))
   const activeFilters = ['state', 'district', 'road', 'defect', 'tier'].filter(k => filters[k]).length + (filters.repeatOnly ? 1 : 0) + (filters.hideWaterOnly ? 1 : 0)
   const clearFilters = () => setFilters(EMPTY)
+  const relaxFilter = k => setFilters(f => ({ ...f, [k]: typeof f[k] === 'boolean' ? false : '' }))
+  const showPlace = () => setFilters(f => placeOnly(f))
   const pick = f => { setSelected(f); setFocusTarget(f); setQuery(''); if (mobile) setSheet('peek') }
   const openFromRankings = f => { setSelected(f); setFocusTarget(f); setTab('map'); setSheet('peek') }
 
   const filterPanel = (
-    <FilterPanel filters={filters} sel={sel} meta={meta} districts={districts} roadTypes={roadTypes}
-      defectsInData={defectsInData} heat={heat} setHeat={setHeat} activeFilters={activeFilters}
-      clearFilters={clearFilters} filtered={filtered} />
+    <FilterPanel filters={filters} sel={sel} options={options} counts={facets.counts} valueLabels={valueLabels}
+      previews={{ repeat: facets.repeat, noWater: facets.noWater }} heat={heat} setHeat={setHeat}
+      activeFilters={activeFilters} clearFilters={clearFilters} filtered={filtered} />
+  )
+  const noMatch = (
+    <NoMatch place={filters.district || filters.state} placeCount={facets.placeCount} relax={facets.relax}
+      describe={k => {
+        const v = filters[k]
+        const label = k === 'road' ? ROAD_TYPE_LABEL[v] : k === 'defect' ? (meta.defect_labels[v] || v) : k === 'tier' ? TIER_LABEL[v] : null
+        return label ? `${FILTER_LABEL[k]}: ${label}` : FILTER_LABEL[k]
+      }}
+      onShowPlace={showPlace} onRelax={relaxFilter} clearFilters={clearFilters} />
   )
 
   return (
@@ -180,7 +200,7 @@ export default function App() {
           <main className="flex-1 relative min-w-0">
             <MapView features={filtered} frame={covered} heat={heat} onSelect={f => setSelected(f)} selectedId={selected?.properties?.id}
               focus={focusTarget} fitKey={JSON.stringify(filters)} onViewChange={setView} />
-            {filtered.length === 0 && <NoMatch clearFilters={clearFilters} />}
+            {filtered.length === 0 && noMatch}
             {selected && <Dossier feature={selected} meta={meta} onClose={() => setSelected(null)} />}
           </main>
         </div>
@@ -195,7 +215,7 @@ export default function App() {
             <SearchBox query={query} setQuery={setQuery} results={results} onPick={pick} floating />
             <CoverageChip coverage={coverage} />
           </div>
-          {filtered.length === 0 && <NoMatch clearFilters={clearFilters} />}
+          {filtered.length === 0 && noMatch}
           {!selected && (
             <Sheet state={sheet} onState={setSheet}
               title={sheet === 'peek' ? `${plural(inView.length, 'location')} in view` : undefined}>
@@ -322,24 +342,24 @@ function LocationRow({ f, meta, onPick }) {
   )
 }
 
-function FilterPanel({ filters, sel, meta, districts, roadTypes, defectsInData, heat, setHeat, activeFilters, clearFilters, filtered }) {
+function FilterPanel({ filters, sel, options, counts, valueLabels, previews, heat, setHeat, activeFilters, clearFilters, filtered }) {
+  const n = v => v.toLocaleString('en-IN')
   return (
     <div className="flex flex-col gap-2.5 text-[13px]">
-      <Select label="State" value={filters.state} onChange={v => sel('state', v)} options={meta.states} />
-      <Select label="District" value={filters.district} onChange={v => sel('district', v)} options={districts} />
-      <Select label="Road type" value={filters.road} onChange={v => sel('road', v)} options={roadTypes} labels={ROAD_TYPE_LABEL} />
-      <Select label="Defect" value={filters.defect} onChange={v => sel('defect', v)} options={defectsInData} labels={meta.defect_labels} />
-      <Select label="Priority tier" value={filters.tier} onChange={v => sel('tier', v)}
-        options={['critical', 'high', 'medium', 'watch']} labels={Object.fromEntries(Object.keys(TIER_LABEL).map(t => [t, `${TIER_LABEL[t]} — ${TIER_HINT[t]}`]))} />
+      {FACETS.map(k => (
+        <Select key={k} label={FILTER_LABEL[k]} value={filters[k]} onChange={v => sel(k, v)}
+          options={options[k]} counts={counts[k]} labels={valueLabels[k]} />
+      ))}
       <label className="flex items-center gap-2 mt-1 cursor-pointer text-muted-foreground">
         <input type="checkbox" checked={filters.repeatOnly} onChange={e => sel('repeatOnly', e.target.checked)} className="accent-danger h-4 w-4" />
-        Repeated reports only (2+)
+        Repeated reports only (2+) <span className="ml-auto tabular-nums text-[11.5px]">{n(previews.repeat)}</span>
       </label>
       <label className="flex items-start gap-2 cursor-pointer text-muted-foreground">
         <input type="checkbox" checked={filters.hideWaterOnly} onChange={e => sel('hideWaterOnly', e.target.checked)} className="accent-danger h-4 w-4 mt-0.5" />
-        <span>Hide waterlogging-only locations
+        <span className="flex-1">Hide waterlogging-only locations
           <span className="block text-[11.5px] leading-snug">Seasonal: drainage reports with no other defect named</span>
         </span>
+        <span className="tabular-nums text-[11.5px] mt-0.5">{n(previews.noWater)}</span>
       </label>
       <label className="flex items-center gap-2 cursor-pointer text-muted-foreground">
         <input type="checkbox" checked={heat} onChange={e => setHeat(e.target.checked)} className="accent-brand h-4 w-4" />
@@ -372,27 +392,65 @@ function FilterPanel({ filters, sel, meta, districts, roadTypes, defectsInData, 
   )
 }
 
-function NoMatch({ clearFilters }) {
+// Empty result. Two different truths: the place is covered and the OTHER filters emptied
+// it (say how many it has, offer the way back), or there is simply nothing here (then,
+// and only then, the coverage sentence).
+function NoMatch({ place, placeCount, relax, describe, onShowPlace, onRelax, clearFilters }) {
+  const byFilters = placeCount > 0 || relax.length > 0
   return (
     <div className="absolute inset-0 z-10 grid place-items-center pointer-events-none px-6">
       <div className="pointer-events-auto bg-white border border-border rounded-2xl px-6 py-5 max-w-sm text-center shadow-lg">
         <div className="font-heading font-bold text-[14px]">No locations match these filters</div>
-        <p className="text-[12.5px] text-muted-foreground mt-1.5">Absence here is absence of coverage — never a safety clearance.</p>
-        <button onClick={clearFilters} className="mt-3 h-10 px-5 rounded-full bg-brand text-white text-[13px] cursor-pointer">Clear all filters</button>
+        {byFilters ? (
+          <>
+            {place && placeCount > 0 && (
+              <p className="text-[12.5px] text-muted-foreground mt-1.5">
+                {place} has {plural(placeCount, 'location')} on record. None match the other filters.
+              </p>
+            )}
+            {place && placeCount > 0 && (
+              <button onClick={onShowPlace} className="mt-3 h-10 px-5 rounded-full bg-brand text-white text-[13px] cursor-pointer">
+                Show all {placeCount.toLocaleString('en-IN')} in {place}
+              </button>
+            )}
+            {relax.length > 0 && (
+              <div className="mt-3 flex flex-wrap justify-center gap-1.5">
+                {relax.slice(0, 3).map(r => (
+                  <button key={r.key} onClick={() => onRelax(r.key)}
+                    className="h-8 px-3 rounded-full border border-border text-[12px] text-brand hover:bg-brand-soft cursor-pointer">
+                    Without {describe(r.key)} · {r.count.toLocaleString('en-IN')}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button onClick={clearFilters} className="mt-3 text-[12px] text-muted-foreground underline underline-offset-2 cursor-pointer">Clear all filters</button>
+          </>
+        ) : (
+          <>
+            <p className="text-[12.5px] text-muted-foreground mt-1.5">Absence here is absence of coverage — never a safety clearance.</p>
+            <button onClick={clearFilters} className="mt-3 h-10 px-5 rounded-full bg-brand text-white text-[13px] cursor-pointer">Clear all filters</button>
+          </>
+        )}
       </div>
     </div>
   )
 }
 
-function Select({ label, value, onChange, options, labels }) {
+function Select({ label, value, onChange, options, counts, labels }) {
   const id = `f-${label.toLowerCase().replace(/\s+/g, '-')}`
+  // Offer only options that leave at least one location under the other filters; the
+  // chosen value stays listed (with its count, even 0) so a shared link stays legible.
+  const shown = options.filter(o => (counts?.[o] || 0) > 0 || o === value)
+  if (value && !options.includes(value)) shown.push(value)
   return (
     <label className="block" htmlFor={id}>
       <span className="font-heading text-[10px] tracking-[0.2em] text-muted-foreground">{label.toUpperCase()}</span>
       <select id={id} value={value} onChange={e => onChange(e.target.value)}
         className="mt-1 w-full h-10 border border-border rounded-lg px-2.5 bg-white text-[13px]">
         <option value="">All</option>
-        {options.map(o => <option key={o} value={o}>{labels?.[o] || o}</option>)}
+        {shown.map(o => (
+          <option key={o} value={o}>{labels?.[o] || o}{counts ? ` (${(counts[o] || 0).toLocaleString('en-IN')})` : ''}</option>
+        ))}
       </select>
     </label>
   )
