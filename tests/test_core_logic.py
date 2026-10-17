@@ -927,7 +927,7 @@ def _patch_collect_env(monkeypatch, items, fetcher):
     monkeypatch.setattr(run_mod.configload, "settings", lambda: {})
     monkeypatch.setattr(run_mod.configload, "outlet_tiers", lambda: {})
     monkeypatch.setattr(run_mod.rss, "build_queries",
-                        lambda d, kw, max_lang_terms: [("q", "en")])
+                        lambda d, kw, max_lang_terms, season_term=None: [("q", "en")])
     monkeypatch.setattr(run_mod.rss, "collect", lambda *a, **kw: items)
     monkeypatch.setattr(run_mod, "fetch_article", fetcher)
     return run_mod
@@ -1705,3 +1705,39 @@ def test_scoring_inputs_come_from_public_members_only():
     assert "join public_incident" in " ".join(PUBLIC_SEVERITY_SQL.lower().split())
     from datetime import date as _d
     assert len(agg_params(_d(2026, 10, 16))) == _sc.HOTSPOT_AGG_SQL.count("%s")
+
+
+# ------------------------------------------------- seasonal defect query term (17 Oct 2026)
+# Waterlogging reports ran 691 / 1,089 / 1,038 / 285 a month from July to October 2026
+# and fade through the dry months, when unlit roads and visibility take over. The second
+# defect query slot follows the season instead of asking every district for waterlogging
+# in January.
+from pipeline.collectors.rss import seasonal_term  # noqa: E402
+
+_SEASON = {"monsoon_months": [6, 7, 8, 9, 10],
+           "monsoon": {"hi": "जलभराव", "en": "waterlogging"},
+           "dry": {"hi": "स्ट्रीट लाइट", "en": "street lights"}}
+
+
+def test_seasonal_term_follows_the_month_and_language():
+    assert seasonal_term(_SEASON, "hi", 8) == "जलभराव" and seasonal_term(_SEASON, "hi", 11) == "स्ट्रीट लाइट"
+    assert seasonal_term(_SEASON, "en", 1) == "street lights" and seasonal_term(_SEASON, "en", 6) == "waterlogging"
+    assert seasonal_term(_SEASON, "ta", 8) is None                 # no term for the language -> caller keeps its default
+    assert seasonal_term(None, "hi", 8) is None and seasonal_term({}, "hi", 8) is None
+
+
+def test_season_term_takes_the_second_defect_slot_only_when_given():
+    q = _rss.build_queries(_HI, _KW, max_lang_terms=3, season_term="स्ट्रीट लाइट")
+    assert q == [('"Bhadohi" road accident', "en"), ('"Bhadohi" सड़क दुर्घटना', "hi"),
+                 ('"Bhadohi" गड्ढे', "hi"), ('"Bhadohi" स्ट्रीट लाइट', "hi")]
+    assert _rss.build_queries(_HI, _KW, max_lang_terms=3)[3] == ('"Bhadohi" जलभराव', "hi")   # unchanged without it
+    assert len(q) == 4
+
+
+def test_seasonal_query_term_is_configured_for_every_query_language():
+    from pipeline import configload
+    s = _json.load(open(configload.CONFIG_DIR / "config_settings.json"))["settings"]["ingestion"]["seasonal_query_term"]
+    assert s["monsoon_months"] == [6, 7, 8, 9, 10]
+    for lang in ("hi", "en", "mr"):
+        assert s["monsoon"][lang] and s["dry"][lang]
+    assert s["monsoon"]["hi"] == "जलभराव"

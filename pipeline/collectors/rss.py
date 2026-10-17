@@ -45,9 +45,24 @@ class FeedItem:
 DEFECT_QUERY_SLOTS = 2   # of the max_lang_terms primary-language slots, how many carry defect terms
 
 
+def seasonal_term(cfg: dict | None, lang: str, month: int) -> str | None:
+    """The defect query term for this month and language, or None when the config has
+    none for the language (the caller then keeps its year-round default).
+
+    Waterlogging reports ran 691 / 1,089 / 1,038 / 285 a month from July to October 2026
+    and fade through the dry months, when unlit roads and visibility take over. Asking
+    every district for waterlogging in January buys nothing; config ingestion.
+    seasonal_query_term names the monsoon months and one term per season per language."""
+    if not cfg:
+        return None
+    season = "monsoon" if month in (cfg.get("monsoon_months") or []) else "dry"
+    return (cfg.get(season) or {}).get(lang) or None
+
+
 def build_queries(district_row: dict, kw: dict[str, dict[str, list[str]]],
                   max_lang_terms: int = 3,
-                  defect_slots: int = DEFECT_QUERY_SLOTS) -> list[tuple[str, str]]:
+                  defect_slots: int = DEFECT_QUERY_SLOTS,
+                  season_term: str | None = None) -> list[tuple[str, str]]:
     """[(query, lang)] — English starter, then primary-language terms: crash terms in
     the first (max_lang_terms - defect_slots) slots, DEFECT terms in the rest.
 
@@ -58,7 +73,8 @@ def build_queries(district_row: dict, kw: dict[str, dict[str, list[str]]],
     found when they happened to mention a crash word. Two of the three slots now carry
     the per-language `query_defect` terms (falling back to the head of `infra_defect`),
     so the query count per district — and the Google throttle profile — is unchanged.
-    English-primary districts get the English defect terms after their starter."""
+    English-primary districts get the English defect terms after their starter.
+    season_term, when given, takes the last defect slot (17 Oct 2026)."""
     q: list[tuple[str, str]] = []
     starter = district_row["starter_query_en"].strip()
     if starter:
@@ -66,7 +82,13 @@ def build_queries(district_row: dict, kw: dict[str, dict[str, list[str]]],
     lang = district_row["primary_language"]
     name = district_row["query_name"]
     terms = kw.get(lang, {})
-    defect = (terms.get("query_defect") or terms.get("infra_defect", []))[:defect_slots]
+    defect = list((terms.get("query_defect") or terms.get("infra_defect", []))[:defect_slots])
+    if season_term:
+        # the LAST defect slot follows the season (see seasonal_term)
+        if len(defect) >= defect_slots:
+            defect[-1] = season_term
+        else:
+            defect.append(season_term)
     if lang != "en":
         for term in terms.get("crash", [])[:max(0, max_lang_terms - len(defect))]:
             q.append((f'"{name}" {term}', lang))

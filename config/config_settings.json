@@ -71,7 +71,13 @@
         "abplive.com",
         "news4nation.com"
       ],
-      "blocked_domains_note": "Dropped at the feed before URL resolution and fetch. Measured 4 Jul-16 Oct 2026, pins per 1,000 articles vs 40 overall: ETV Bharat 5.0 (2,380 articles), News18 Hindi 3.5 (1,731), Navbharat Times 2.7 (1,104), ABP News 4.4 (459), News4Nation 4.5 (446) - together 3.9% of the collection and 0.4% of the pins. Kept at 9-10 per 1,000: Patrika, Bhaskar English, newstrack. Re-measure with health yield_7d before adding or removing a domain."
+      "blocked_domains_note": "Dropped at the feed before URL resolution and fetch. Measured 4 Jul-16 Oct 2026, pins per 1,000 articles vs 40 overall: ETV Bharat 5.0 (2,380 articles), News18 Hindi 3.5 (1,731), Navbharat Times 2.7 (1,104), ABP News 4.4 (459), News4Nation 4.5 (446) - together 3.9% of the collection and 0.4% of the pins. Kept at 9-10 per 1,000: Patrika, Bhaskar English, newstrack. Re-measure with health yield_7d before adding or removing a domain.",
+      "seasonal_query_term": {
+        "note": "The second defect query slot follows the season. Waterlogging reports ran 691 / 1,089 / 1,038 / 285 a month from July to October 2026 and fade in the dry months, when unlit roads and visibility take over. Month numbers are IST calendar months. Terms are short headline words that work as Google News queries.",
+        "monsoon_months": [6, 7, 8, 9, 10],
+        "monsoon": {"hi": "जलभराव", "en": "waterlogging", "mr": "पाणी साचणे"},
+        "dry": {"hi": "स्ट्रीट लाइट", "en": "street lights", "mr": "पथदिवे"}
+      }
     },
     "models": {
       "relevance": "claude-haiku-4-5-20251001",
