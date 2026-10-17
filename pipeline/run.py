@@ -286,9 +286,12 @@ def collect_district(d: dict, store, args) -> dict:
              "robots": 0, "errors": 0, "blocked": 0}
     # outlets measured at 3-5 pins per 1,000 articles (see rss.blocked_domain) are
     # dropped at the feed, before the resolver round-trip and the fetch
-    blocked = (configload.settings().get("ingestion", {}) or {}).get("blocked_domains") or []
+    ing = configload.settings().get("ingestion", {}) or {}
+    blocked = ing.get("blocked_domains") or []
     skip = (lambda dom: rss.blocked_domain(dom, blocked)) if blocked else None
-    for query, lang in rss.build_queries(d, kw, max_lang_terms=args.lang_terms):
+    # the second defect query slot follows the season (waterlogging Jun-Oct, lighting otherwise)
+    season = rss.seasonal_term(ing.get("seasonal_query_term"), d.get("primary_language"), date.today().month)
+    for query, lang in rss.build_queries(d, kw, max_lang_terms=args.lang_terms, season_term=season):
         stats["queries"] += 1
         try:
             before_blocked = rss.STATS.get("blocked_outlet", 0)
