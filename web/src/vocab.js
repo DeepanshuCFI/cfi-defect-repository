@@ -58,3 +58,12 @@ export function geocodeWords(method, conf) {
 export const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`
 
 export const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : null
+
+// Waterlogging is seasonal: 48% of public reports carried the tag on 17 Oct 2026, and
+// 7% carried nothing else. A location is "waterlogging-only" when its reports name no
+// defect besides drainage (the catch-all tag does not count as another defect). The
+// map's "Hide waterlogging-only locations" toggle uses this; the data stays published.
+export const WATERLOGGING = 'waterlogging_or_poor_drainage'
+export const isWaterloggingOnly = defects =>
+  (defects || []).includes(WATERLOGGING) &&
+  (defects || []).every(d => d === WATERLOGGING || d === 'other_infrastructure')

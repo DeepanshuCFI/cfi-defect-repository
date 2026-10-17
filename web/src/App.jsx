@@ -4,12 +4,12 @@ import MapView from './MapView.jsx'
 import Dossier from './Dossier.jsx'
 import Rankings from './Rankings.jsx'
 import Sheet from './Sheet.jsx'
-import { EVIDENCE_HINT, EVIDENCE_LABEL, ROAD_TYPE_LABEL, TIER_COLOR, TIER_HINT, TIER_LABEL, fmtDate, plural } from './vocab.js'
+import { EVIDENCE_HINT, EVIDENCE_LABEL, ROAD_TYPE_LABEL, TIER_COLOR, TIER_HINT, TIER_LABEL, fmtDate, plural, isWaterloggingOnly } from './vocab.js'
 
 // Filters, tab, heat and selected location live in the URL so any view is a
 // citable link (?state=Rajasthan&tier=high, ?h=42, …).
 const initQ = new URLSearchParams(window.location.search)
-const EMPTY = { state: '', district: '', road: '', defect: '', tier: '', repeatOnly: false }
+const EMPTY = { state: '', district: '', road: '', defect: '', tier: '', repeatOnly: false, hideWaterOnly: false }
 
 function useMedia(query) {
   const [m, setM] = useState(() => window.matchMedia(query).matches)
@@ -34,6 +34,7 @@ export default function App() {
     state: initQ.get('state') || '', district: initQ.get('district') || '',
     road: initQ.get('road') || '', defect: initQ.get('defect') || '',
     tier: initQ.get('tier') || '', repeatOnly: initQ.get('repeat') === '1',
+    hideWaterOnly: initQ.get('nowl') === '1',
   })
   const [heat, setHeat] = useState(initQ.get('heat') === '1')
   const [view, setView] = useState(null)
@@ -63,6 +64,7 @@ export default function App() {
     if (tab !== 'map') p.set('tab', tab)
     for (const k of ['state', 'district', 'road', 'defect', 'tier']) if (filters[k]) p.set(k, filters[k])
     if (filters.repeatOnly) p.set('repeat', '1')
+    if (filters.hideWaterOnly) p.set('nowl', '1')
     if (heat) p.set('heat', '1')
     if (selected) p.set('h', selected.properties.id)
     const qs = p.toString()
@@ -78,6 +80,7 @@ export default function App() {
       if (filters.defect && !(p.defects || []).includes(filters.defect)) return false
       if (filters.tier && p.tier !== filters.tier) return false
       if (filters.repeatOnly && p.incidents < 2) return false
+      if (filters.hideWaterOnly && isWaterloggingOnly(p.defects)) return false
       if (filters.road && !(p.road_types || []).includes(filters.road)) return false
       return true
     })
@@ -115,7 +118,7 @@ export default function App() {
   const covered = coverage.states?.length ? data.hs.features.filter(f => coverage.states.includes(f.properties.state)) : data.hs.features
 
   const sel = (k, v) => setFilters(f => ({ ...f, [k]: v, ...(k === 'state' ? { district: '' } : {}) }))
-  const activeFilters = ['state', 'district', 'road', 'defect', 'tier'].filter(k => filters[k]).length + (filters.repeatOnly ? 1 : 0)
+  const activeFilters = ['state', 'district', 'road', 'defect', 'tier'].filter(k => filters[k]).length + (filters.repeatOnly ? 1 : 0) + (filters.hideWaterOnly ? 1 : 0)
   const clearFilters = () => setFilters(EMPTY)
   const pick = f => { setSelected(f); setFocusTarget(f); setQuery(''); if (mobile) setSheet('peek') }
   const openFromRankings = f => { setSelected(f); setFocusTarget(f); setTab('map'); setSheet('peek') }
@@ -331,6 +334,12 @@ function FilterPanel({ filters, sel, meta, districts, roadTypes, defectsInData, 
       <label className="flex items-center gap-2 mt-1 cursor-pointer text-muted-foreground">
         <input type="checkbox" checked={filters.repeatOnly} onChange={e => sel('repeatOnly', e.target.checked)} className="accent-danger h-4 w-4" />
         Repeated reports only (2+)
+      </label>
+      <label className="flex items-start gap-2 cursor-pointer text-muted-foreground">
+        <input type="checkbox" checked={filters.hideWaterOnly} onChange={e => sel('hideWaterOnly', e.target.checked)} className="accent-danger h-4 w-4 mt-0.5" />
+        <span>Hide waterlogging-only locations
+          <span className="block text-[11.5px] leading-snug">Seasonal: drainage reports with no other defect named</span>
+        </span>
       </label>
       <label className="flex items-center gap-2 cursor-pointer text-muted-foreground">
         <input type="checkbox" checked={heat} onChange={e => setHeat(e.target.checked)} className="accent-brand h-4 w-4" />
