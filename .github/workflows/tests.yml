@@ -40,3 +40,23 @@ jobs:
       # stopped being a unit test — keep that pressure on by never granting one here.
       - name: Run tests
         run: python -m pytest tests/ -q
+
+  # The map's filter rules (web/src/filters.js) are pure functions with a node:test
+  # suite since 17 Oct 2026; lint and build catch the rest of the frontend.
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
