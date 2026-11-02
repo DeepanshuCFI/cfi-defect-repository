@@ -1741,3 +1741,69 @@ def test_seasonal_query_term_is_configured_for_every_query_language():
     for lang in ("hi", "en", "mr"):
         assert s["monsoon"][lang] and s["dry"][lang]
     assert s["monsoon"]["hi"] == "जलभराव"
+
+
+# ---------------------------------------------------------------- aggregate casualty totals
+# 2 Nov 2026: the live headline read "1,827 deaths on record", but 1,170 of those came
+# from three rows that were period/area statistics, not crashes ("Jaipur recorded 560
+# road accident deaths in 10 months", stored twice; "over 50 deaths in accidents there").
+# Summaries below are real narrative_summary values from production.
+from pipeline.store import looks_like_aggregate_casualties  # noqa: E402
+
+AGGREGATE_SUMMARIES = [  # (summary, fatalities, injuries) as stored
+    ("Jaipur recorded 560 road accident deaths in 10 months (Jan-Oct). Traffic police identified 16 black spots city-wide.", 560, 0),
+    ("MP Sanatan Pandey wrote to Union Minister Nitin Gadkari demanding an underpass on NH-24, citing over 50 deaths in accidents there.", 50, 0),
+    ("Hanumangarh-Suratgarh Road is riddled with potholes. Over 20 accidents occur monthly; past 3 years saw 16+ deaths and 132+ injuries.", 16, 132),
+    ("A 4 km stretch of NH-11 in Bikaner will be widened. Over 2023-2026, 41 accidents caused 16 deaths.", 16, 41),
+    ("Repeated crashes on Drumandganj hill's steep slope on NH-135 in Mirzapur killed 14 people between 28 March and 6 September.", 14, 0),
+    ("In 2025, Patna district recorded 756 deaths in 4,932 road accidents (Jan 2022–Dec 2025).", 756, 0),
+    ("Over nine months in Moradabad district, 176 deaths occurred in road crashes.", 176, 0),
+    ("Shivani Tiraha in Jhansi has seen over 125 deaths in past 8-10 years due to frequent accidents.", 125, 0),
+    ("Over two and a half months, NH-123 in Dholpur district saw 22 accidents killing 13 and injuring 24.", 13, 24),
+    ("Himachal Pradesh monsoon crisis over 55 days (June 30-Aug 23) caused 224 deaths.", 224, 0),
+    ("Stray cattle on Madhya Pradesh roads have caused 437 deaths in the first eight months of 2026.", 437, 614),
+    ("Aggregate road safety data from Nagpur city reveals 2,556 crashes causing 1,127 deaths.", 1127, 0),
+    ("Monsoon rains in Himachal Pradesh since June 30 have caused 197 deaths (81 weather-related, 116 from road accidents).", 197, 313),
+    ("Jaipur Range police identified 101 accident-prone zones based on a 3-year crash survey across eight districts.", 101, 0),
+    ("Article discusses Mumbai's poor pedestrian infrastructure citywide, noting missing footpaths force pedestrians onto roads.", 1100, 0),
+]
+
+SINGLE_CRASH_SUMMARIES = [
+    ("A truck lost control near Sheetla Mata Temple in Gwalior and struck devotees. At least 18 people were killed and 30 others injured.", 18, 30),
+    ("An out-of-control truck hit devotees at 1:30 am on October 18, 2026, killing 16 people including Motiram Prajapati (78), who died 52 hours later from injuries.", 16, 3),
+    ("On 20 December 2024, a truck collided with an LPG tanker taking a U-turn on Ajmer Road, Rajasthan, killing 19 people.", 19, 0),
+    ("A private sleeper bus caught fire, killing 29 passengers. The article commemorates the first anniversary of this incident.", 29, 0),
+    ("A motorcycle carrying two men hit a roadside tree near Khargpur village while returning from Gyanpur. The rider died.", 1, 1),
+    ("A pickup carrying 32 pilgrims was hit from behind around 1 am on the Eastern Peripheral Expressway; 13 died.", 13, 19),
+    # context about the spot next to ONE real victim (scan of production, 2 Nov 2026)
+    ("A car lost control on a dangerous curve near Kanwarpura village on Mega Highway, killing one occupant. Villagers say over 50 accidents have occurred here.", 1, 1),
+    # an ISO date is not a year range
+    ("Sanjay Shukla, a motorcycle rider, died in a road crash on the Tadighat-Bara National Highway (2026-10-14).", 1, 0),
+]
+
+
+def test_aggregate_casualty_summaries_are_detected():
+    missed = [s for s, f, i in AGGREGATE_SUMMARIES if not looks_like_aggregate_casualties(s, f, i)]
+    assert not missed, missed
+
+
+def test_single_crash_summaries_are_not_flagged():
+    flagged = [s for s, f, i in SINGLE_CRASH_SUMMARIES if looks_like_aggregate_casualties(s, f, i)]
+    assert not flagged, flagged
+
+
+def test_coerce_zeroes_casualties_on_aggregate_summary():
+    s, f, i = AGGREGATE_SUMMARIES[0]
+    inc = coerce_incident({"fatalities": f, "injuries": i, "narrative_summary": s})
+    assert inc["fatalities"] == 0 and inc["injuries"] == 0
+
+
+def test_coerce_keeps_casualties_on_single_crash():
+    s, f, i = SINGLE_CRASH_SUMMARIES[0]
+    inc = coerce_incident({"fatalities": f, "injuries": i, "narrative_summary": s})
+    assert inc["fatalities"] == 18 and inc["injuries"] == 30
+
+
+def test_coerce_without_summary_keeps_casualties():
+    inc = coerce_incident({"fatalities": 2, "injuries": 1})
+    assert inc["fatalities"] == 2 and inc["injuries"] == 1

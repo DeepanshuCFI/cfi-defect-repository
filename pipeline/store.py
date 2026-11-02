@@ -7,6 +7,7 @@ Identical interface either way so collectors/CLI don't branch:
   store.counts() -> dict
 """
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -65,6 +66,59 @@ def _to_float(v, default=0.0):
         return default
 
 
+# A record's fatalities/injuries must be the victims of ONE crash. Roundups ("Jaipur
+# recorded 560 road accident deaths in 10 months") were stored as if they were a crash:
+# on 2 Nov 2026 three such rows supplied 1,170 of the site's 1,827 "deaths on record".
+# The extraction prompt now says so (rule 4); this is the deterministic backstop, run on
+# the model's own English summary. Erring towards zero is the honest direction: a
+# missed total inflates a public headline, a false hit only under-counts one record.
+_MONTH = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|"
+          r"aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)")
+_QTY = (r"(?:\d+(?:\s*[-–]\s*\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|"
+        r"eleven|twelve|several|few)")
+_AGGREGATE_PATTERNS = [
+    # "in 10 months", "over nine months", "in the first eight months", "over 55 days"
+    rf"\b(?:in|over|during|across)\s+(?:the\s+)?(?:(?:past|last|first|previous)\s+)?"
+    rf"{_QTY}(?:\s+and\s+a\s+half)?\s+(?:days|weeks|months|years)\b",
+    # "past 3 years saw …"
+    rf"\b(?:past|last|previous)\s+{_QTY}\s+(?:days|weeks|months|years)\b",
+    # "between January and July", "between 28 March and 6 September"
+    rf"\bbetween\s+(?:\d{{1,2}}\s+)?(?:{_MONTH}|(?:19|20)\d\d)\b",
+    # "2023-2026", "2019 to 2024" — but not an ISO date like 2026-10-18
+    r"\b(?:19|20)\d\d\s*(?:-|–|—|to)\s*(?:19|20)?\d\d\b(?![-/]\d)",
+    # "Jan-Oct", "January–June 2026", "June 30-Aug 23", "Jan 2022–Dec 2025"
+    rf"\b{_MONTH}\.?(?:\s+\d{{1,2}})?(?:,?\s+(?:19|20)\d\d)?\s*(?:-|–|—|to)\s*"
+    rf"(?:\d{{1,2}}\s+)?{_MONTH}\b",
+    # "occur monthly", "every year"
+    r"(?<![-\w])(?:monthly|annually|yearly)\b|\b(?:per|every|each)\s+(?:day|week|month|year)\b",
+    rf"\bsince\s+(?:\d{{1,2}}\s+)?(?:(?:19|20)\d\d|{_MONTH})\b",
+    # "three years of crash data", "a 3-year crash survey"
+    rf"\b{_QTY}[-\s](?:years?|months?)\s+(?:of\s+)?(?:crash|accident)\s+(?:data|survey|records)\b",
+    r"\b(?:city|district|state)-?wide\b",
+    # "41 accidents caused 16 deaths", "deaths in accidents there"
+    r"\b(?:\d[\d,]*|two|three|four|five|six|seven|eight|nine|ten)\+?\s+"
+    r"(?:road\s+|highway\s+)?(?:accidents|crashes|collisions)\b",
+    r"\b(?:deaths|died|killed)\s+in\s+(?:road\s+)?(?:accidents|crashes)\b",
+    r"\b(?:aggregate|statistics|statistical|till date|so far this year)\b",
+]
+_AGGREGATE_RE = re.compile("|".join(f"(?:{p})" for p in _AGGREGATE_PATTERNS), re.I)
+
+
+# Single-crash summaries often carry context ("villagers say over 50 accidents here")
+# next to one real death; zeroing those would erase genuine victims. Every roundup seen
+# in production carried >=10 casualties, so the wording alone is not enough.
+AGGREGATE_MIN_CASUALTIES = 10
+
+
+def looks_like_aggregate_casualties(summary: str | None, fatalities: int = 0,
+                                    injuries: int = 0) -> bool:
+    """True when the summary reports casualties summed over a period, an area or many
+    crashes rather than one crash (pure, unit-tested on real production summaries)."""
+    if fatalities + injuries < AGGREGATE_MIN_CASUALTIES or not summary:
+        return False
+    return bool(_AGGREGATE_RE.search(summary))
+
+
 def coerce_incident(inc: dict) -> dict:
     """Fill NOT NULL defaults the model may omit and sanitise nullish/stringly-typed
     values (non-required schema fields)."""
@@ -73,6 +127,9 @@ def coerce_incident(inc: dict) -> dict:
     inc["victim_types"] = inc.get("victim_types") or []
     inc["fatalities"] = _to_int(inc.get("fatalities"))
     inc["injuries"] = _to_int(inc.get("injuries"))
+    if looks_like_aggregate_casualties(inc.get("narrative_summary"),
+                                       inc["fatalities"], inc["injuries"]):
+        inc["fatalities"] = inc["injuries"] = 0
     # non-numeric confidence -> 0.0: fails the publish gate, lands in review. Honest.
     inc["extraction_confidence"] = _to_float(inc.get("extraction_confidence"))
     inc["road_type"] = inc.get("road_type") or "unknown"
