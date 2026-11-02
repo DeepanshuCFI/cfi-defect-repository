@@ -161,7 +161,15 @@ jobs:
           except Exception:
               sys.exit(f'live auth ping produced no envelope — token dead or CLI broken:\n{raw[:300]}')
           if env.get('is_error'):
-              sys.exit(f\"live auth ping refused — token invalid server-side, refresh CLAUDE_CODE_OAUTH_TOKEN:\n{str(env.get('result'))[:300]}\")
+              result = str(env.get('result'))
+              # The subscription's usage cap also arrives as an is_error envelope. On
+              # 31 Oct both runs died here with \"You've hit your weekly limit · resets
+              # 7pm (UTC)\" under a 'token invalid, refresh' headline — the token was
+              # fine. Name the real cause so nobody rotates a working token.
+              if 'limit' in result.lower():
+                  sys.exit(f'subscription usage limit reached — token is fine, do NOT refresh it; '
+                           f'the next scheduled run after the reset will go through:\n{result[:300]}')
+              sys.exit(f'live auth ping refused — token invalid server-side, refresh CLAUDE_CODE_OAUTH_TOKEN:\n{result[:300]}')
           print('ok — live round-trip succeeded, token valid server-side')
           "
 
