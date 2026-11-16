@@ -110,6 +110,12 @@ def plan(args) -> None:
         if args.ids:
             where.append("i.id = any(%s)")
             params.append([int(x) for x in args.ids.split(",")])
+        if args.shard:
+            # k/n: one of n disjoint slices by id, so several plans can run side by
+            # side (each with its own --out, and so its own cache) and be concatenated
+            k, n_shards = (int(x) for x in args.shard.split("/"))
+            where.append("i.id %% %s = %s")
+            params += [n_shards, k]
         if where:
             sql += " where " + " and ".join(where)
         sql += " order by i.id"
@@ -227,6 +233,7 @@ def main() -> None:
     ap.add_argument("--all-states", action="store_true", help="include reports outside the covered states")
     ap.add_argument("--ids", help="comma-separated incident ids only")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--shard", help="k/n — plan only ids with id %% n == k")
     ap.add_argument("--resume", action="store_true", help="continue an interrupted plan in --out")
     args = ap.parse_args()
     if args.apply_from:

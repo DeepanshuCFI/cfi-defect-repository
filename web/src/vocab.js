@@ -62,12 +62,12 @@ export const VERIFICATION_LABEL = {
 
 /** One report's location in words: what its marker was pinned to, or why it has none. */
 export function locationWords(i) {
-  if (i.mapped === false || !i.precision || i.precision === 'highway') {
-    return i.precision === 'highway' && i.pinned_to
-      ? `on ${i.pinned_to}; the point on the highway is not known`
-      : 'the place named could not be found on the map'
+  if (i.precision === 'highway') {
+    return i.pinned_to ? `on ${i.pinned_to}; the point on the highway is not known` : 'on a numbered highway; the point is not known'
   }
+  if (i.mapped === false) return 'the place named could not be found on the map'
   const what = { spot: 'exact spot', road: 'named road', locality: 'village or locality', town: 'town area' }[i.precision]
+  if (!what) return 'marker not yet re-checked against the place named'
   return i.pinned_to ? `${i.pinned_to} (${what})` : what
 }
 

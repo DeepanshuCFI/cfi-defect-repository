@@ -50,3 +50,18 @@ def test_apply_is_guarded_audited_and_unlinks_what_it_unpins():
     assert rep.REVIEWER == "pipeline:location_guard"
     # scope is the public layer only
     assert "from public_incident p" in " ".join(rep.SELECT.split())
+
+
+# ------------------------------------------- period totals found by reading (item 0.4)
+def test_hand_read_period_totals_are_zeroed_even_below_the_pattern_threshold():
+    from scripts import repair_aggregate_casualties as agg
+    rows = [(14000, 5, 0, "alleging 5 deaths in crashes on it over the past 10 years", True),
+            (15957, 5, 0, "a pickup crashed near Kantaur village, killing 5", True),
+            (21141, 560, 0, "Jaipur recorded 560 road accident deaths in 10 months, statistics show", True)]
+    # the pattern alone takes only the large roundup: under 10 casualties it is unsafe
+    assert [r[0] for r in agg.select_hits(rows, set(), set())] == [21141]
+    # a hand-read id is added; the real single crash is left alone
+    assert [r[0] for r in agg.select_hits(rows, set(), {14000})] == [14000, 21141]
+    # --skip wins over --ids
+    assert [r[0] for r in agg.select_hits(rows, {14000}, {14000})] == [21141]
+    assert agg._id_list(["x", "--ids", "13207,14000"], "--ids") == {13207, 14000}
