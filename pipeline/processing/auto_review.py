@@ -162,10 +162,19 @@ def run(limit: int = 200) -> dict:
             try:
                 verdict = adjudicate(text, ext)
             except Exception as e:
-                from pipeline.run import _raise_if_credential_error
-                _raise_if_credential_error(e)   # dead key must fail the run, not the item
-                if "reached your specified api usage limits" in str(e).lower():
-                    print("  API MONTHLY LIMIT hit — stopping; queue waits for tomorrow")
+                from pipeline.run import _api_limit_hit, _raise_if_credential_error
+                try:
+                    _raise_if_credential_error(e)   # dead key must fail the run, not the item
+                except Exception as fatal:
+                    fatal.partial_stats = dict(stats)   # what was done before it died
+                    raise
+                # Same test the process stage uses. Until 16 Nov 2026 this stage only
+                # knew the API's monthly-limit sentence, so a subscription limit was
+                # WARN'd once per record (200 refused on 25 and 30 Oct) and the run
+                # stayed green.
+                if _api_limit_hit(e):
+                    print(f"  USAGE LIMIT or network block — stopping; queue waits "
+                          f"for the next run ({str(e)[:120]})")
                     stats["api_limit_hit"] = True
                     break
                 print(f"  WARN auto-review failed #{iid}: {e}")

@@ -34,6 +34,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 
 from pipeline import configload
 
@@ -43,11 +44,27 @@ CLI_TIMEOUT_S = 600
 # Claude Code system prompt + tool definitions are ~20k tokens on every invocation.
 # Callers that can batch should batch; this module bills it per call.
 CLI_OVERHEAD_TOKENS = 20_000
+# Waits before re-trying a call the network refused (see TransientBlock). Three tries
+# over ~4 minutes: a passing Cloudflare challenge clears in seconds, and a block that
+# outlasts this is treated as "stop the stage", never as a per-item failure.
+CLI_TRANSIENT_BACKOFF_S = (20, 60, 180)
 
 
 class RateLimited(RuntimeError):
     """The subscription (or API) refused on usage grounds. Never a per-item failure —
     the work is fine, the quota is not. Stop the stage and resume next run."""
+
+
+class TransientBlock(RateLimited):
+    """The network between the runner and the model refused the call — a Cloudflare
+    challenge, a gateway error, an overloaded upstream. Nothing is wrong with the
+    credential or the article. Retried with backoff inside `_cli`; if it outlasts the
+    retries it surfaces as a RateLimited, so the stage stops and the next run resumes.
+
+    13 Nov 2026: the CLI reported "Failed to authenticate. API Error: 403 Attention
+    Required! | Cloudflare" on one call; 38 calls on the same token had succeeded in
+    the ten minutes before and the evening run was fine. It matched the credential
+    pattern and killed the auto-review stage as a dead token."""
 
 
 class CredentialError(RuntimeError):
@@ -94,16 +111,62 @@ _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
 # match degrades into a per-item failure that silently drops an article, so err toward
 # catching too much rather than too little.
 _RATE_LIMIT = re.compile(
-    r"rate.?limit|usage limit|quota|too many requests|429|"
-    r"limit reached|try again (later|in)", re.I)
+    r"rate.?limit|usage limit|quota|too many requests|\b429\b|"
+    r"limit reached|try again (later|in)|"
+    # The subscription's own wording, verbatim from the 25/28/30/31 Oct 2026 logs:
+    # "You've hit your session limit", "You've hit your weekly limit · resets 7pm
+    # (UTC)". None of the phrases above match it, so for three days every call was
+    # refused, WARN'd per article, and the run stayed green.
+    r"hit your [a-z0-9 \-]{0,30}limit|limit\W{0,6}resets|out of (extra )?usage",
+    re.I)
+# A refusal by the network path, not by the model's account. Checked FIRST: the CLI
+# wraps a Cloudflare challenge page as "Failed to authenticate … 403", which would
+# otherwise read as a dead credential (see TransientBlock).
+_TRANSIENT = re.compile(
+    r"cloudflare|attention required|just a moment|cf-ray|"
+    r"\b(500|502|503|504|520|521|522|523|524|529)\b|bad gateway|"
+    r"service unavailable|gateway time-?out|overloaded|internal server error|"
+    r"econnreset|etimedout|enotfound|eai_again|socket hang up|fetch failed|"
+    r"connection (reset|refused|error)", re.I)
 # Auth failure as the CLI reports it (verbatim from run 36: "Failed to authenticate.
 # API Error: 401 OAuth access token is invalid."). Checked BEFORE _RATE_LIMIT: a
 # credential refusal must stop the run, and nothing in these phrases overlaps the
 # usage-limit vocabulary above. Matched only against the CLI's error text, never
 # against article content.
 _AUTH_FAIL = re.compile(
-    r"failed to authenticate|401|403|invalid (api key|x-api-key)|"
+    r"failed to authenticate|\b401\b|\b403\b|invalid (api key|x-api-key)|"
     r"oauth.{0,40}(invalid|expired|revoked)|authentication_error", re.I)
+
+
+def classify_cli_error(text: str) -> str | None:
+    """Name the kind of refusal in the CLI's error text (pure, unit-tested).
+
+    'transient'  network block — retry, then stop the stage
+    'credential' the token itself was refused — run-fatal
+    'rate_limit' the account's usage limit — stop the stage, resume next run
+    None         none of these: a per-item failure
+
+    Order is the whole point. Transient before credential, because a Cloudflare 403
+    arrives dressed as an authentication failure. Credential before rate limit, as
+    before."""
+    text = text or ""
+    if _TRANSIENT.search(text):
+        return "transient"
+    if _AUTH_FAIL.search(text):
+        return "credential"
+    if _RATE_LIMIT.search(text):
+        return "rate_limit"
+    return None
+
+
+def _raise_classified(text: str) -> None:
+    kind = classify_cli_error(text)
+    if kind == "transient":
+        raise TransientBlock(text[:300])
+    if kind == "credential":
+        raise CredentialError(text[:300])
+    if kind == "rate_limit":
+        raise RateLimited(text[:300])
 
 
 def cli_bin() -> str:
@@ -135,7 +198,7 @@ def _extract_json(text: str) -> dict:
     return out
 
 
-def _cli(system, tool, content, model, max_tokens):
+def _cli_once(system, tool, content, model, max_tokens):
     binary = cli_bin()
     if not binary:
         raise BackendError(
@@ -155,10 +218,7 @@ def _cli(system, tool, content, model, max_tokens):
 
     if not p.stdout.strip():
         err = (p.stderr or "")[:400]
-        if _AUTH_FAIL.search(err):
-            raise CredentialError(err)
-        if _RATE_LIMIT.search(err):
-            raise RateLimited(err)
+        _raise_classified(err)
         raise BackendError(f"cli exited {p.returncode}: {err}")
     try:
         env = json.loads(p.stdout)
@@ -167,10 +227,7 @@ def _cli(system, tool, content, model, max_tokens):
 
     result = env.get("result") or ""
     if env.get("is_error"):
-        if _AUTH_FAIL.search(result) or _AUTH_FAIL.search(p.stderr or ""):
-            raise CredentialError(result[:300])
-        if _RATE_LIMIT.search(result) or _RATE_LIMIT.search(p.stderr or ""):
-            raise RateLimited(result[:300])
+        _raise_classified(f"{result}\n{p.stderr or ''}")
         raise BackendError(f"cli error: {result[:300]}")
 
     # Notional only — a subscription call is not billed. Recording it keeps /qa's
@@ -184,6 +241,21 @@ def _cli(system, tool, content, model, max_tokens):
         output_tokens = int(u.get("output_tokens") or 0)
     llmcost.add(model, _U)
     return _extract_json(result)
+
+
+def _cli(system, tool, content, model, max_tokens):
+    """One CLI call, re-tried through a passing network block.
+
+    Only TransientBlock is retried. A usage limit or a refused credential will not
+    change in three minutes, and a per-item BackendError is the caller's to skip."""
+    for wait in (*CLI_TRANSIENT_BACKOFF_S, None):
+        try:
+            return _cli_once(system, tool, content, model, max_tokens)
+        except TransientBlock as exc:
+            if wait is None:
+                raise
+            print(f"  network block ({str(exc)[:80]!r}) — retrying in {wait}s")
+            time.sleep(wait)
 
 
 # ------------------------------------------------------------------------ public

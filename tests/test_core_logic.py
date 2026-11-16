@@ -879,7 +879,7 @@ def test_cli_rate_limit_still_rate_limited(monkeypatch):
 def test_cli_other_error_stays_per_item(monkeypatch):
     import json, pytest
     _fake_cli(monkeypatch,
-              stdout=json.dumps({"is_error": True, "result": "model overloaded"}))
+              stdout=json.dumps({"is_error": True, "result": "prompt is too long"}))
     with pytest.raises(_llm.BackendError):
         _llm._cli("sys", TOOL, "content", "model-x", 100)
 
