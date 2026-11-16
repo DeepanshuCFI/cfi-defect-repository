@@ -422,7 +422,8 @@ def geocode(location_text: str, road_name: str | None = None,
                     "geocode_method": method, "geocode_qualifier": qualifier,
                     "display_name": hit["display"],
                     "geocode_precision": precision,
-                    "geocode_match": (hit.get("name") or word or "")[:120]}
+                    "geocode_match": (placematch.pinned_name(stated, hit, precision)
+                                      or word or "")[:120]}
     if highway_only:
         return {**NO_PIN, "geocode_precision": "highway", "geocode_match": highway_only[:120]}
     return dict(NO_PIN)

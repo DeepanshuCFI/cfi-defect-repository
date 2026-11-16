@@ -181,3 +181,38 @@ def test_a_street_named_after_a_place_word_needs_the_place_too():
                      district="Jhunjhunu", state="Rajasthan")
     hit = {"name": "Khetri Rd", "ftype": "street", "ctx": {"street": "Khetri Rd", "place": "Chirawa"}}
     assert pm.evidence(stated, hit) == (None, None)
+
+
+def test_a_street_that_only_repeats_the_towns_own_name_is_not_a_second_piece_of_evidence():
+    """First full plan, 16 Nov: 34 Moradabad reports landed on one street because its
+    NAME contains 'Moradabad' and it is IN Moradabad — the same fact twice."""
+    stated = _stated("Ward 18, Harthala Ashiana, Moradabad, Uttar Pradesh",
+                     city="Moradabad", district="Moradabad")
+    street = {"name": "Ward No 32 Moradabad Chandausi Rd Near L G Showroom", "ftype": "street",
+              "ctx": {"street": "Moradabad Chandausi Rd", "locality": "Lajpat Nagar",
+                      "place": "Moradabad"}}
+    assert pm.evidence(stated, street) == (None, None)
+    town = {"name": "Moradabad", "ftype": "place", "ctx": {"place": "Moradabad"}}
+    assert pm.evidence(stated, town) == ("town", "moradabad")
+
+
+def test_a_landmark_street_in_the_named_town_is_still_accepted_and_named_for_the_town():
+    """The control: audit row judged correct within 2 km — 'Jama Masjid Chauraha,
+    Mughalpura, Moradabad' on the street 'Near Jama'. A different word matches the
+    street than matches the town, so it stands; the label is the town, not 'Near Jama'."""
+    stated = _stated("Jama Masjid Chauraha, Mughalpura, Moradabad, Uttar Pradesh",
+                     city="Moradabad", district="Moradabad")
+    hit = {"name": "Near Jama", "ftype": "street", "ctx": {"street": "Near Jama", "place": "Moradabad"}}
+    assert pm.evidence(stated, hit) == ("town", "jama")
+    assert pm.pinned_name(stated, hit, "town") == "Moradabad"
+
+
+def test_the_label_for_a_generic_street_inside_a_village_is_the_village():
+    stated = _stated("near Kurseli village, Hardoi district", district="Hardoi")
+    hit = {"name": "Road", "ftype": "street",
+           "ctx": {"street": "Road", "locality": "Kurseli", "place": "Hardoi"}}
+    assert pm.evidence(stated, hit) == ("locality", "kurseli")
+    assert pm.pinned_name(stated, hit, "locality") == "Kurseli"
+    # a road stays named for the road, a place for itself
+    assert pm.pinned_name(stated, {"name": "Sahpur Road", "ftype": "street", "ctx": {}}, "road") == "Sahpur Road"
+    assert pm.pinned_name(stated, {"name": "Bilgram", "ftype": "place", "ctx": {}}, "town") == "Bilgram"

@@ -182,6 +182,20 @@ def _matches(stated: frozenset, candidate: str | None) -> list[str]:
     return sorted(s for s in stated if any(similar(s, h) for h in cand))
 
 
+def pinned_name(stated: Stated, hit: dict, precision: str | None) -> str:
+    """The name to show for what a pin was accepted on (pure).
+
+    Usually the hit's own name. But when a street was accepted as an AREA because it
+    lies in a village or town the article names, the honest label is that place —
+    "Kurseli", not the street called "Road" inside it."""
+    if precision in ("locality", "town") and (hit.get("ftype") or "").lower() in STREET_FTYPES:
+        ctx, strong = hit.get("ctx") or {}, stated.place - stated.weak
+        for key in ("neighborhood", "locality", "place"):
+            if ctx.get(key) and _matches(strong, ctx[key]):
+                return ctx[key]
+    return hit.get("name") or ""
+
+
 def evidence(stated: Stated, hit: dict) -> tuple[str | None, str | None]:
     """(precision, matched_word) for one geocoder hit, or (None, None) to reject it.
 
@@ -205,9 +219,15 @@ def evidence(stated: Stated, hit: dict) -> tuple[str | None, str | None]:
         if named:
             return ("spot" if ftype == "address" else "road"), named[0]
         any_word = on_road or _matches(stated.place, name)
-        if any_word and in_town:
+        # A second piece of evidence must be a DIFFERENT word. A street called
+        # "Ward 32 Moradabad Chandausi Rd" in Moradabad matches the town's name twice
+        # over and says nothing more than "somewhere in Moradabad" — 34 reports sat on
+        # that one street in the first full plan (16 Nov 2026). Such a hit is passed
+        # over, so the ladder reaches the town itself.
+        independent = [w for w in any_word if w not in in_town]
+        if independent and in_town:
             # a weak or landmark word, AND the hit lies in a place the article names
-            return ("road" if on_road else area), any_word[0]
+            return ("road" if on_road else area), independent[0]
         if len(on_road) >= 2 and not all(_is_highway_ref(t) for t in on_road):
             return "road", on_road[0]
         if near:
