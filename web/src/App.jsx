@@ -173,8 +173,10 @@ export default function App() {
     <div className="h-full flex flex-col">
       {/* top bar */}
       <header className="border-b border-border bg-white z-20 shrink-0">
-        <div className="px-4 sm:px-5 h-14 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
+        <div className={`px-4 sm:px-5 h-14 flex items-center gap-3 ${tab === 'unmapped' ? 'justify-center sm:justify-between' : 'justify-between'}`}>
+          {/* on a phone the four-tab bar (only shown while "Not mapped" is open) leaves no
+              room for the title, which would truncate to "H…" — drop it there instead */}
+          <div className={`items-center gap-3 min-w-0 ${tab === 'unmapped' ? 'hidden sm:flex' : 'flex'}`}>
             {/* brand rule: logo min-width 180px — below sm we show the text title only */}
             <img src="cfi-logo.svg" alt="Crashfree India" className="h-6 w-auto shrink-0 hidden sm:block" />
             <span className="h-6 w-px bg-border shrink-0 hidden sm:block" aria-hidden="true" />
