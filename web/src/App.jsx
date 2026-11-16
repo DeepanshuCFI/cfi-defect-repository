@@ -1,15 +1,21 @@
-import { useEffect, useMemo, useState } from 'react'
-import { List, Search, SlidersHorizontal, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ArrowRight, List, Search, SlidersHorizontal, X } from 'lucide-react'
 import MapView from './MapView.jsx'
 import Dossier from './Dossier.jsx'
 import Rankings from './Rankings.jsx'
 import Sheet from './Sheet.jsx'
-import { EVIDENCE_HINT, EVIDENCE_LABEL, ROAD_TYPE_LABEL, TIER_COLOR, TIER_HINT, TIER_LABEL, fmtDate, plural } from './vocab.js'
+import Unmapped from './Unmapped.jsx'
+import { EVIDENCE_HINT, EVIDENCE_LABEL, PRECISION_LABEL, PRECISION_ORDER, ROAD_TYPE_LABEL, TIER_COLOR, TIER_HINT,
+         TIER_LABEL, fmtDate, isArea, plural } from './vocab.js'
 import { EMPTY, FACETS, FILTER_LABEL, applyFilters, countWith, facetCounts, placeOnly, relaxations } from './filters.js'
 
 // Filters, tab, heat and selected location live in the URL so any view is a
 // citable link (?state=Rajasthan&tier=high, ?h=42, …).
 const initQ = new URLSearchParams(window.location.search)
+const TABS = ['map', 'rankings', 'unmapped', 'method']
+const TAB_LABEL = { map: 'Map', rankings: 'Rankings', unmapped: 'Not mapped', method: 'Method' }
+// What a location is called: an area is the place it is pinned to, a road is the road.
+const nameOf = p => (isArea(p.precision) && p.place ? p.place : (p.road_name || p.place || 'Unnamed stretch'))
 
 function useMedia(query) {
   const [m, setM] = useState(() => window.matchMedia(query).matches)
@@ -27,13 +33,15 @@ export default function App() {
   // bottom sheet (launch review, 16 Oct 2026: the panel used to leave the map 87px).
   const mobile = !useMedia('(min-width: 768px)')
   const [data, setData] = useState(null)
-  const [tab, setTab] = useState(['map', 'rankings', 'method'].includes(initQ.get('tab')) ? initQ.get('tab') : 'map')
+  const [tab, setTab] = useState(TABS.includes(initQ.get('tab')) ? initQ.get('tab') : 'map')
+  const [listPlace, setListPlace] = useState({ state: initQ.get('us') || '', district: initQ.get('ud') || '' })
+  const onListPlace = useCallback(p => setListPlace(p), [])
   const [selected, setSelected] = useState(null)          // location feature
   const [focusTarget, setFocusTarget] = useState(null)    // location the map should fly to (not map clicks)
   const [filters, setFilters] = useState({
     state: initQ.get('state') || '', district: initQ.get('district') || '',
     road: initQ.get('road') || '', defect: initQ.get('defect') || '',
-    tier: initQ.get('tier') || '', repeatOnly: initQ.get('repeat') === '1',
+    tier: initQ.get('tier') || '', precision: initQ.get('prec') || '', repeatOnly: initQ.get('repeat') === '1',
     hideWaterOnly: initQ.get('nowl') === '1',
   })
   const [heat, setHeat] = useState(initQ.get('heat') === '1')
@@ -63,13 +71,16 @@ export default function App() {
     const p = new URLSearchParams()
     if (tab !== 'map') p.set('tab', tab)
     for (const k of ['state', 'district', 'road', 'defect', 'tier']) if (filters[k]) p.set(k, filters[k])
+    if (filters.precision) p.set('prec', filters.precision)
+    if (tab === 'unmapped' && listPlace.state) p.set('us', listPlace.state)
+    if (tab === 'unmapped' && listPlace.district) p.set('ud', listPlace.district)
     if (filters.repeatOnly) p.set('repeat', '1')
     if (filters.hideWaterOnly) p.set('nowl', '1')
     if (heat) p.set('heat', '1')
     if (selected) p.set('h', selected.properties.id)
     const qs = p.toString()
     window.history.replaceState(null, '', qs ? `?${qs}` : window.location.pathname)
-  }, [tab, filters, heat, selected])
+  }, [tab, filters, heat, selected, listPlace])
 
   const filtered = useMemo(() => (data ? applyFilters(data.hs.features, filters) : []), [data, filters])
 
@@ -102,7 +113,7 @@ export default function App() {
     if (!data || query.trim().length < 2) return []
     const q = query.trim().toLowerCase()
     return data.hs.features
-      .filter(f => { const p = f.properties; return [p.road_name, p.city, p.district, p.state].some(v => v && v.toLowerCase().includes(q)) })
+      .filter(f => { const p = f.properties; return [p.road_name, p.place, p.city, p.district, p.state].some(v => v && v.toLowerCase().includes(q)) })
       .sort((a, b) => (b.properties.score || 0) - (a.properties.score || 0))
       .slice(0, 8)
   }, [data, query])
@@ -118,16 +129,17 @@ export default function App() {
     road: meta.road_types || Object.keys(facets.counts.road).sort(),
     defect: Object.keys(facets.counts.defect).sort(),
     tier: ['critical', 'high', 'medium', 'watch'],
+    precision: PRECISION_ORDER,
   }
   const valueLabels = {
-    state: {}, district: {}, road: ROAD_TYPE_LABEL, defect: meta.defect_labels,
+    state: {}, district: {}, road: ROAD_TYPE_LABEL, defect: meta.defect_labels, precision: PRECISION_LABEL,
     tier: Object.fromEntries(Object.keys(TIER_LABEL).map(t => [t, `${TIER_LABEL[t]} — ${TIER_HINT[t]}`])),
   }
   const coverage = meta.coverage || { states: meta.states, districts: null }
   const covered = coverage.states?.length ? data.hs.features.filter(f => coverage.states.includes(f.properties.state)) : data.hs.features
 
   const sel = (k, v) => setFilters(f => ({ ...f, [k]: v, ...(k === 'state' ? { district: '' } : {}) }))
-  const activeFilters = ['state', 'district', 'road', 'defect', 'tier'].filter(k => filters[k]).length + (filters.repeatOnly ? 1 : 0) + (filters.hideWaterOnly ? 1 : 0)
+  const activeFilters = FACETS.filter(k => filters[k]).length + (filters.repeatOnly ? 1 : 0) + (filters.hideWaterOnly ? 1 : 0)
   const clearFilters = () => setFilters(EMPTY)
   const relaxFilter = k => setFilters(f => ({ ...f, [k]: typeof f[k] === 'boolean' ? false : '' }))
   const showPlace = () => setFilters(f => placeOnly(f))
@@ -137,13 +149,21 @@ export default function App() {
   const filterPanel = (
     <FilterPanel filters={filters} sel={sel} options={options} counts={facets.counts} valueLabels={valueLabels}
       previews={{ repeat: facets.repeat, noWater: facets.noWater }} heat={heat} setHeat={setHeat}
-      activeFilters={activeFilters} clearFilters={clearFilters} filtered={filtered} />
+      activeFilters={activeFilters} clearFilters={clearFilters} filtered={filtered} flagOn={!!meta.site?.repeat_crash_flag} />
+  )
+  const unmappedLink = (meta.unmapped || 0) > 0 && (
+    <button onClick={() => setTab('unmapped')}
+      className="mt-2.5 w-full text-left rounded-xl border border-border px-3 py-2 text-[12px] text-muted-foreground hover:bg-brand-soft cursor-pointer flex items-center gap-2">
+      <span><b className="text-foreground font-medium">{meta.unmapped.toLocaleString('en-IN')} more reports</b> have no marker: the place they name is not on the map. Listed by district</span>
+      <ArrowRight className="h-4 w-4 shrink-0 text-brand" />
+    </button>
   )
   const noMatch = (
     <NoMatch place={filters.district || filters.state} placeCount={facets.placeCount} relax={facets.relax}
       describe={k => {
         const v = filters[k]
-        const label = k === 'road' ? ROAD_TYPE_LABEL[v] : k === 'defect' ? (meta.defect_labels[v] || v) : k === 'tier' ? TIER_LABEL[v] : null
+        const label = k === 'road' ? ROAD_TYPE_LABEL[v] : k === 'defect' ? (meta.defect_labels[v] || v) : k === 'tier' ? TIER_LABEL[v]
+          : k === 'precision' ? PRECISION_LABEL[v] : null
         return label ? `${FILTER_LABEL[k]}: ${label}` : FILTER_LABEL[k]
       }}
       onShowPlace={showPlace} onRelax={relaxFilter} clearFilters={clearFilters} />
@@ -164,11 +184,14 @@ export default function App() {
             </span>
           </div>
           <nav className="flex gap-0.5 no-print shrink-0" aria-label="Sections">
-            {['map', 'rankings', 'method'].map(t => (
+            {/* "Not mapped" sits in the bar from sm up; on a phone it is reached from the
+                list sheet and the Method page, where there is room to say what it is */}
+            {TABS.map(t => (
               <button key={t} onClick={() => setTab(t)} aria-current={tab === t ? 'page' : undefined}
-                className={`h-10 px-3 sm:px-4 rounded-full text-[13px] capitalize cursor-pointer
+                className={`h-10 px-3 sm:px-4 rounded-full text-[13px] cursor-pointer whitespace-nowrap
+                  ${t === 'unmapped' && tab !== t ? 'hidden sm:inline-block' : ''}
                   ${tab === t ? 'bg-brand text-white' : 'text-muted-foreground hover:text-foreground'}`}>
-                {t}
+                {TAB_LABEL[t]}
               </button>
             ))}
           </nav>
@@ -178,7 +201,7 @@ export default function App() {
       {/* one-line disclaimer; the full text lives on Method (and in every dossier's citation line) */}
       <div className="bg-brand-soft border-b border-border px-4 sm:px-5 py-1.5 text-[12px] text-muted-foreground flex gap-2 items-center shrink-0">
         <b className="text-warn font-heading text-[10.5px] tracking-widest shrink-0">AS REPORTED</b>
-        <span className="truncate">Reports as published in news media · locations indicative · absence of data is absence of coverage</span>
+        <span className="truncate">Reports as published in news media · a marker is a named road, village or town, not a surveyed point · absence of data is absence of coverage</span>
         <button onClick={() => setTab('method')} className="text-brand hover:underline cursor-pointer shrink-0 ml-auto">How we work</button>
       </div>
 
@@ -190,6 +213,7 @@ export default function App() {
             </div>
             <div className="p-4 border-b border-border">
               <StatsGrid meta={meta} shown={filtered.length} />
+              {unmappedLink}
               <CoverageChip coverage={coverage} className="mt-2.5" />
             </div>
             <div className="p-4 overflow-y-auto">{filterPanel}</div>
@@ -235,6 +259,7 @@ export default function App() {
               {sheetTab === 'list' ? (
                 <div className="px-4 pb-4">
                   <StatsGrid meta={meta} shown={filtered.length} compact />
+                  {unmappedLink}
                   <div className="font-heading text-[10px] tracking-[0.2em] text-muted-foreground mt-3 mb-1.5">
                     {plural(inView.length, 'LOCATION').toUpperCase()} IN VIEW · HIGHEST PRIORITY FIRST
                   </div>
@@ -254,7 +279,9 @@ export default function App() {
         <Rankings features={data.hs.features} meta={meta} onOpen={openFromRankings} />
       )}
 
-      {tab === 'method' && <Method meta={meta} coverage={coverage} />}
+      {tab === 'unmapped' && <Unmapped meta={meta} initial={listPlace} onPlace={onListPlace} />}
+
+      {tab === 'method' && <Method meta={meta} coverage={coverage} onUnmapped={() => setTab('unmapped')} />}
     </div>
   )
 }
@@ -280,9 +307,9 @@ function SearchBox({ query, setQuery, results, onPick, floating }) {
               <li key={p.id}>
                 <button onClick={() => onPick(f)} role="option" aria-selected="false"
                   className="w-full text-left px-4 py-2.5 hover:bg-brand-soft cursor-pointer border-b border-border last:border-0">
-                  <span className="font-heading font-semibold text-[13px] block truncate">{p.road_name || 'Unnamed stretch'}</span>
+                  <span className="font-heading font-semibold text-[13px] block truncate">{nameOf(p)}</span>
                   <span className="text-[11.5px] text-muted-foreground block truncate">
-                    {[p.city, p.district, p.state].filter(Boolean).join(', ')} · {plural(p.incidents, 'report')}
+                    {PRECISION_LABEL[p.precision] || PRECISION_LABEL.unchecked} · {[p.district, p.state].filter(Boolean).join(', ')} · {plural(p.incidents, 'report')}
                   </span>
                 </button>
               </li>
@@ -328,12 +355,12 @@ function LocationRow({ f, meta, onPick }) {
     <button onClick={() => onPick(f)}
       className="w-full text-left rounded-xl border border-border px-3 py-2.5 mb-2 hover:bg-brand-soft cursor-pointer">
       <div className="flex items-center gap-2">
-        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: TIER_COLOR[p.tier] }} aria-hidden="true" />
-        <span className="font-heading font-semibold text-[13px] truncate">{p.road_name || 'Unnamed stretch'}</span>
+        <Marker tier={p.tier} precision={p.precision} />
+        <span className="font-heading font-semibold text-[13px] truncate">{nameOf(p)}</span>
         <span className="ml-auto text-[11px] text-muted-foreground shrink-0">{TIER_LABEL[p.tier]}</span>
       </div>
       <div className="text-[11.5px] text-muted-foreground mt-0.5 truncate">
-        {[p.city, p.district].filter(Boolean).join(', ')} · {plural(p.incidents, 'report')}
+        {PRECISION_LABEL[p.precision] || PRECISION_LABEL.unchecked} · {p.district} · {plural(p.incidents, 'report')}
         {p.fatalities > 0 ? ` · ${plural(p.fatalities, 'death')}` : ''}
         {p.escalation ? ` · ${EVIDENCE_LABEL.escalation.toLowerCase()}` : ''}
         {(p.defects || []).length ? ` · ${(meta.defect_labels[p.defects[0]] || p.defects[0])}` : ''}
@@ -342,7 +369,18 @@ function LocationRow({ f, meta, onPick }) {
   )
 }
 
-function FilterPanel({ filters, sel, options, counts, valueLabels, previews, heat, setHeat, activeFilters, clearFilters, filtered }) {
+// The marker as the map draws it: a solid dot for a named road or an exact spot, a
+// ring for an area (a village or a town) — the same rule as MapView's paint.
+function Marker({ tier, precision, size = 10 }) {
+  const c = TIER_COLOR[tier] || TIER_COLOR.watch
+  const area = isArea(precision)
+  return (
+    <span className="rounded-full shrink-0 inline-block" aria-hidden="true"
+      style={{ width: size, height: size, background: area ? `${c}29` : c, border: area ? `2px solid ${c}` : 'none' }} />
+  )
+}
+
+function FilterPanel({ filters, sel, options, counts, valueLabels, previews, heat, setHeat, activeFilters, clearFilters, filtered, flagOn }) {
   const n = v => v.toLocaleString('en-IN')
   return (
     <div className="flex flex-col gap-2.5 text-[13px]">
@@ -380,12 +418,24 @@ function FilterPanel({ filters, sel, options, counts, valueLabels, previews, hea
             <span className="ml-auto tabular-nums text-[11px]">{filtered.filter(f => f.properties.tier === t).length}</span>
           </div>
         ))}
+        <div className="pt-2 mt-1 border-t border-border">
+          <div className="font-heading text-[10px] tracking-[0.2em] text-muted-foreground mb-1.5">WHAT A MARKER MEANS</div>
+          <div className="flex items-start gap-2 text-[12px] text-muted-foreground py-0.5">
+            <span className="mt-0.5"><Marker tier="high" precision="road" size={12} /></span>
+            <span><b className="text-foreground font-medium">Solid dot</b> · the road the reports name, or an exact spot</span>
+          </div>
+          <div className="flex items-start gap-2 text-[12px] text-muted-foreground py-0.5">
+            <span className="mt-0.5"><Marker tier="high" precision="town" size={12} /></span>
+            <span><b className="text-foreground font-medium">Ring</b> · a village or a town the reports name. The report is somewhere in that area; the exact spot is not known</span>
+          </div>
+        </div>
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground pt-2 mt-1 border-t border-border">
           <span className="w-5 h-5 rounded-full grid place-items-center text-[9px] font-bold text-white shrink-0 bg-brand">12</span>
           A blue bubble is a count of locations — tap to zoom in. Colour shows priority only on single locations.
         </div>
         <div className="text-[12px] text-muted-foreground pt-2 mt-1 border-t border-border">
-          {Object.entries(EVIDENCE_LABEL).map(([k, v]) => <div key={k}><b className="text-foreground font-medium">{v}</b> · {EVIDENCE_HINT[k]}</div>)}
+          {Object.entries(EVIDENCE_LABEL).filter(([k]) => k !== 'escalation' || flagOn)
+            .map(([k, v]) => <div key={k}><b className="text-foreground font-medium">{v}</b> · {EVIDENCE_HINT[k]}</div>)}
         </div>
       </div>
     </div>
@@ -456,7 +506,8 @@ function Select({ label, value, onChange, options, counts, labels }) {
   )
 }
 
-function Method({ meta, coverage }) {
+function Method({ meta, coverage, onUnmapped }) {
+  const outside = meta.outside_coverage?.reports || 0
   const Item = ({ k, t, children }) => (
     <div className="rounded-2xl border border-border p-5 sm:p-6">
       <div className="font-heading text-[10.5px] tracking-[0.2em] text-brand">{k}</div>
@@ -479,16 +530,17 @@ function Method({ meta, coverage }) {
           </Item>
           <Item k="COVERAGE" t={`${coverage.states?.length || 0} states today, expanding`}>
             The collector runs daily in {coverage.states?.join(', ')}{coverage.districts ? `, ${coverage.districts} districts` : ''}.
-            Other states appear only when their stories surface incidentally. An empty state on this map is an
-            uncovered state, not a safe one.
+            Only these states are shown and counted here.{outside > 0 ? ` ${outside.toLocaleString('en-IN')} reports that surfaced
+            incidentally from other states are held back until those states are covered.` : ''} An empty state on
+            this map is an uncovered state, not a safe one.
           </Item>
           <Item k="SOURCE" t="Everything traces to published articles">
             Every report links every article behind it — outlet, date, URL — and carries its evidence quotes
             verbatim, in the original language. No source, no record.
           </Item>
           <Item k="CONFIDENCE GATE" t="Only high-confidence entries publish">
-            An entry appears only if extraction confidence is at least 0.7, location confidence at least 0.6,
-            the coverage itself implicates infrastructure, and a second automated review agrees — or a human
+            An entry appears only if extraction confidence is at least 0.7, the place it names is found on the
+            map, the coverage itself implicates infrastructure, and a second automated review agrees — or a human
             reviewer approved it. Everything else waits in an internal review queue, and what no human will act
             on is archived rather than left to imply a backlog.
           </Item>
@@ -496,15 +548,20 @@ function Method({ meta, coverage }) {
             A crash report with no infrastructure claim is stored without a defect and never published. The
             repository never invents a pothole to explain a death, and it reports attribution, not accusation.
           </Item>
-          <Item k="LOCATION" t="Road-level unless the reports say otherwise">
-            Most reports name a road or a landmark, not a point. A location marked road-level is that named
-            feature; a point location has three or more distinct coordinates behind it. Both are indicative
-            pending a physical audit.
+          <Item k="LOCATION" t="A named road, village or town, never a guessed point">
+            A marker is placed only where the map knows a name that the report itself uses. A solid dot is the
+            road the reports name; a ring is the village or town they name, and the report is somewhere inside
+            it. Nearly all markers are one of these two. None is a surveyed point: all are indicative pending
+            a physical audit.
           </Item>
-          <Item k="REPEAT CRASHES" t="Three or more casualty crashes in six months">
-            A location is flagged for repeat crashes when at least three crashes with deaths or injuries were
-            reported there in the last six months on precisely located pins. Crash reports that make no
-            infrastructure claim count toward this flag and nothing else; the dossier says how many there are.
+          <Item k="NOT ON THE MAP" t="Published, but listed without a marker">
+            When the place a report names cannot be found on the map, the report is not pinned somewhere
+            nearby. It stays published and is listed by district.{' '}
+            {(meta.unmapped || 0) > 0 && (
+              <button onClick={onUnmapped} className="text-brand hover:underline cursor-pointer">
+                See the {meta.unmapped.toLocaleString('en-IN')} reports listed this way
+              </button>
+            )}
           </Item>
           <Item k="PRIORITY" t="A transparent score over public evidence only">
             Each location's score (0–100) weighs casualties, report frequency, recency, vulnerable road users,
@@ -523,7 +580,8 @@ function Method({ meta, coverage }) {
         </div>
         <p className="text-[12px] text-muted-foreground mt-8">
           Registry generated {new Date(meta.generated_at).toLocaleString('en-IN')} ·
-          {' '}{plural(meta.hotspots, 'location')} · {plural(meta.incidents, 'public report')} · Crashfree India (Vision Zero Trust).
+          {' '}{plural(meta.hotspots, 'location')} · {plural(meta.incidents, 'public report')}
+          {meta.unmapped != null ? ` (${meta.mapped.toLocaleString('en-IN')} on the map, ${meta.unmapped.toLocaleString('en-IN')} listed without a marker)` : ''} · Crashfree India (Vision Zero Trust).
           Cite as: Crashfree India, National Road-Infrastructure Defect Repository, as of {fmtDate(meta.generated_at)}.
         </p>
       </div>

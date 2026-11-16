@@ -55,3 +55,17 @@ test('checkbox previews and relaxations', () => {
   assert.deepEqual(placeOnly(stack), { ...EMPTY, state: 'Bihar', district: 'Gaya' })
   assert.equal(applyFilters(features, placeOnly(stack)).length, 3)
 })
+
+test('precision is a facet like any other, and a location with none counts as unchecked', () => {
+  const fs = [
+    F(1, { state: 'Bihar', district: 'Gaya', tier: 'high', precision: 'road' }),
+    F(2, { state: 'Bihar', district: 'Gaya', tier: 'watch', precision: 'town' }),
+    F(3, { state: 'Bihar', district: 'Gaya', tier: 'watch', precision: 'town' }),
+    F(4, { state: 'Bihar', district: 'Patna', tier: 'watch' }),
+  ]
+  assert.deepEqual(facetCounts(fs, EMPTY, 'precision'), { road: 1, town: 2, unchecked: 1 })
+  assert.equal(applyFilters(fs, { ...EMPTY, precision: 'town' }).length, 2)
+  assert.equal(applyFilters(fs, { ...EMPTY, precision: 'unchecked' }).length, 1)
+  assert.deepEqual(facetCounts(fs, { ...EMPTY, precision: 'town' }, 'district'), { Gaya: 2 })
+  assert.equal(placeOnly({ ...EMPTY, state: 'Bihar', precision: 'town' }).precision, '')
+})

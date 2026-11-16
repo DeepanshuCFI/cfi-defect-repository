@@ -9,13 +9,14 @@
 // node:test (npm test).
 import { isWaterloggingOnly } from './vocab.js'
 
-export const EMPTY = { state: '', district: '', road: '', defect: '', tier: '', repeatOnly: false, hideWaterOnly: false }
+export const EMPTY = { state: '', district: '', road: '', defect: '', tier: '', precision: '', repeatOnly: false, hideWaterOnly: false }
 
 // Select facets, in panel order. Checkbox filters are repeatOnly and hideWaterOnly.
-export const FACETS = ['state', 'district', 'road', 'defect', 'tier']
+export const FACETS = ['state', 'district', 'road', 'defect', 'tier', 'precision']
 
 export const FILTER_LABEL = {
   state: 'State', district: 'District', road: 'Road type', defect: 'Defect', tier: 'Priority tier',
+  precision: 'Location known as',
   repeatOnly: 'Repeated reports only', hideWaterOnly: 'Hide waterlogging-only',
 }
 
@@ -26,6 +27,7 @@ const RULES = {
   road: (p, v) => (p.road_types || []).includes(v),
   defect: (p, v) => (p.defects || []).includes(v),
   tier: (p, v) => p.tier === v,
+  precision: (p, v) => (p.precision || 'unchecked') === v,
   repeatOnly: p => (p.incidents || 0) >= 2,
   hideWaterOnly: p => !isWaterloggingOnly(p.defects),
 }
@@ -33,6 +35,7 @@ const RULES = {
 // The values a location contributes to a facet (a road or defect list counts once per entry).
 const VALUES = {
   state: p => [p.state], district: p => [p.district], tier: p => [p.tier],
+  precision: p => [p.precision || 'unchecked'],
   road: p => p.road_types || [], defect: p => p.defects || [],
 }
 

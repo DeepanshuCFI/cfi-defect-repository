@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Download, Flag } from 'lucide-react'
-import { EVIDENCE_HINT, TIER_COLOR, TIER_LABEL, TIER_TEXT } from './vocab.js'
+import { EVIDENCE_HINT, PRECISION_LABEL, TIER_COLOR, TIER_LABEL, TIER_TEXT, isArea } from './vocab.js'
 
 export default function Rankings({ features, meta, onOpen }) {
   const [state, setState] = useState('')
@@ -11,13 +11,13 @@ export default function Rankings({ features, meta, onOpen }) {
     [features, state])
 
   const csv = () => {
-    const head = ['rank', 'score', 'tier', 'repeat_crashes', 'location_precision', 'road_name', 'city',
+    const head = ['rank', 'score', 'tier', 'location_known_as', 'pinned_to', 'road_name', 'city',
       'district', 'state', 'public_reports', 'records_not_shown', 'fatalities', 'injuries', 'first_report',
       'last_report', 'dominant_defects', 'lat', 'lon']
     const lines = rows.map((f, ix) => {
       const p = f.properties
       const [lon, lat] = f.geometry.coordinates
-      return [ix + 1, p.score, p.tier, p.escalation, p.location_precision || 'feature', q(p.road_name), q(p.city),
+      return [ix + 1, p.score, p.tier, p.precision || 'unchecked', q(p.place), q(p.road_name), q(p.city),
         q(p.district), q(p.state), p.incidents, p.records_hidden ?? 0, p.fatalities, p.injuries, p.first, p.last,
         q((p.defects || []).map(d => meta.defect_labels[d] || d).join('; ')), lat, lon].join(',')
     })
@@ -70,11 +70,11 @@ export default function Rankings({ features, meta, onOpen }) {
                 <span className="font-heading font-bold text-muted-foreground">{ix + 1}</span>
                 <span className="min-w-0">
                   <span className="font-heading font-semibold text-[13.5px] block truncate">
-                    {p.road_name || 'Unnamed stretch'}
+                    {isArea(p.precision) && p.place ? p.place : (p.road_name || p.place || 'Unnamed stretch')}
                     {p.escalation && <Flag className="inline h-3.5 w-3.5 text-danger ml-1 align-[-2px]" aria-label="Repeat crashes" />}
                   </span>
                   <span className="text-[12px] text-muted-foreground block truncate">
-                    {[p.district, p.state].filter(Boolean).join(', ')}
+                    {PRECISION_LABEL[p.precision] || PRECISION_LABEL.unchecked} · {[p.district, p.state].filter(Boolean).join(', ')}
                     {(p.defects || []).length > 0 &&
                       ' · ' + p.defects.map(d => meta.defect_labels[d] || d).join(', ')}
                   </span>
@@ -104,7 +104,9 @@ export default function Rankings({ features, meta, onOpen }) {
         </div>
         <p className="text-[11.5px] text-muted-foreground mt-4">
           Score weighs casualties, report frequency, recency, vulnerable road users, defect severity and
-          evidence strength — public reports only. <Flag className="inline h-3 w-3 text-danger align-[-1px]" /> = {EVIDENCE_HINT.escalation}.
+          evidence strength — public reports only.
+          {meta.site?.repeat_crash_flag && <> <Flag className="inline h-3 w-3 text-danger align-[-1px]" /> = {EVIDENCE_HINT.escalation}.</>}
+          {' '}A location is a named road, village or town, as each row says; none is a surveyed point.
           {rows.length > 500 && ` Showing the top 500 of ${rows.length}; the CSV has every row.`} CSV includes coordinates for GIS use.
         </p>
       </div>

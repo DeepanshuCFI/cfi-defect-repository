@@ -7,6 +7,15 @@ const STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
 const COUNT_FONT = ['Montserrat Medium', 'Open Sans Bold', 'Noto Sans Regular']
 const BRAND = '#4736FE'
 
+// A marker's SHAPE says how precisely the place is known (16 Nov 2026). A named road or
+// an exact spot is a solid dot. A village, locality or town is a ring: the report is
+// somewhere inside it, and a dot there would claim a point nobody has. Town rings are
+// larger than village rings because the area is.
+const TIER_PAINT = ['match', ['get', 'tier'],
+  'critical', TIER_COLOR.critical, 'high', TIER_COLOR.high, 'medium', TIER_COLOR.medium, TIER_COLOR.watch]
+const IS_AREA = ['match', ['get', 'precision'], ['locality', 'town'], true, false]
+const strokeWidth = selectedId => ['case', ['==', ['get', 'id'], selectedId ?? -1], 3.5, IS_AREA, 2.5, 1.5]
+
 export default function MapView({ features, frame, heat, onSelect, selectedId, focus, fitKey, onViewChange, padding }) {
   const el = useRef(null)
   const map = useRef(null)
@@ -85,13 +94,12 @@ export default function MapView({ features, frame, heat, onSelect, selectedId, f
         id: 'hs-circles', type: 'circle', source: 'hs',
         filter: ['!', ['has', 'point_count']],
         paint: {
-          'circle-radius': ['+', 6, ['*', 3, ['min', ['get', 'incidents'], 5]]],
-          'circle-color': ['match', ['get', 'tier'],
-            'critical', TIER_COLOR.critical, 'high', TIER_COLOR.high,
-            'medium', TIER_COLOR.medium, TIER_COLOR.watch],
-          'circle-opacity': 0.85,
-          'circle-stroke-width': ['case', ['==', ['get', 'id'], selectedId ?? -1], 3, 1.5],
-          'circle-stroke-color': '#ffffff',
+          'circle-radius': ['+', 6, ['*', 3, ['min', ['get', 'incidents'], 5]],
+            ['match', ['get', 'precision'], 'town', 8, 'locality', 3, 0]],
+          'circle-color': TIER_PAINT,
+          'circle-opacity': ['case', IS_AREA, 0.16, 0.85],
+          'circle-stroke-width': strokeWidth(selectedId),
+          'circle-stroke-color': ['case', IS_AREA, TIER_PAINT, '#ffffff'],
         },
       })
       m.on('click', 'hs-clusters', async e => {
@@ -169,8 +177,7 @@ export default function MapView({ features, frame, heat, onSelect, selectedId, f
 
   useEffect(() => {
     if (ready.current) {
-      map.current.setPaintProperty('hs-circles', 'circle-stroke-width',
-        ['case', ['==', ['get', 'id'], selectedId ?? -1], 3, 1.5])
+      map.current.setPaintProperty('hs-circles', 'circle-stroke-width', strokeWidth(selectedId))
     }
   }, [selectedId])
 
