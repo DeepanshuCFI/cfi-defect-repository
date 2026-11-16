@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { EMPTY, applyFilters, countWith, facetCounts, matches, placeOnly, relaxations } from './filters.js'
+import { EMPTY, applyFilters, countWith, facetCounts, matches, openingFrame, placeOnly, relaxations } from './filters.js'
 
 const F = (id, p) => ({ type: 'Feature', properties: { id, incidents: 1, defects: [], road_types: [], ...p } })
 const WL = 'waterlogging_or_poor_drainage'
@@ -68,4 +68,14 @@ test('precision is a facet like any other, and a location with none counts as un
   assert.equal(applyFilters(fs, { ...EMPTY, precision: 'unchecked' }).length, 1)
   assert.deepEqual(facetCounts(fs, { ...EMPTY, precision: 'town' }, 'district'), { Gaya: 2 })
   assert.equal(placeOnly({ ...EMPTY, state: 'Bihar', precision: 'town' }).precision, '')
+})
+
+test('a link that arrives with filters opens on what the filters leave', () => {
+  const base = { hasFocus: false, filtersActive: false, changedBeforeLoad: false, matches: 41 }
+  assert.equal(openingFrame(base), 'coverage')                                   // plain visit
+  assert.equal(openingFrame({ ...base, filtersActive: true }), 'filtered')       // ?district=Hardoi
+  assert.equal(openingFrame({ ...base, changedBeforeLoad: true }), 'filtered')   // filtered while loading
+  assert.equal(openingFrame({ ...base, filtersActive: true, hasFocus: true }), 'focus')   // ?h= wins
+  // filters that match nothing must not try to frame an empty set
+  assert.equal(openingFrame({ ...base, filtersActive: true, matches: 0 }), 'coverage')
 })

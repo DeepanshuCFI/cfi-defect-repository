@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import maplibregl from 'maplibre-gl'
 import { TIER_COLOR } from './vocab.js'
+import { openingFrame } from './filters.js'
 
 const STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
 // Montserrat matches --font-heading; the trailing stacks are the basemap's CJK fallbacks.
@@ -16,7 +17,7 @@ const TIER_PAINT = ['match', ['get', 'tier'],
 const IS_AREA = ['match', ['get', 'precision'], ['locality', 'town'], true, false]
 const strokeWidth = selectedId => ['case', ['==', ['get', 'id'], selectedId ?? -1], 3.5, IS_AREA, 2.5, 1.5]
 
-export default function MapView({ features, frame, heat, onSelect, selectedId, focus, fitKey, onViewChange, padding }) {
+export default function MapView({ features, frame, heat, onSelect, selectedId, focus, fitKey, fitOnLoad, onViewChange, padding }) {
   const el = useRef(null)
   const map = useRef(null)
   const ready = useRef(false)
@@ -27,6 +28,7 @@ export default function MapView({ features, frame, heat, onSelect, selectedId, f
   const mountFitKey = useRef(fitKey)
   const padRef = useRef(padding)
   const frameRef = useRef(frame)
+  const fitOnLoadRef = useRef(fitOnLoad)
   featRef.current = features
   focusRef.current = focus
   padRef.current = padding
@@ -121,13 +123,17 @@ export default function MapView({ features, frame, heat, onSelect, selectedId, f
       // zoomed past clustering so its dot is visible next to the open dossier.
       // Otherwise frame the covered states, not the whole country: the collector runs
       // in three states and an all-India view makes the other twenty-five look clear.
-      if (focusRef.current) {
+      const opening = openingFrame({
+        hasFocus: !!focusRef.current, filtersActive: !!fitOnLoadRef.current,
+        changedBeforeLoad: fitKeyRef.current !== mountFitKey.current, matches: featRef.current.length })
+      if (opening === 'focus') {
         m.jumpTo({ center: focusRef.current.geometry.coordinates, zoom: Math.max(m.getZoom(), 12) })
-      } else if (fitKeyRef.current !== mountFitKey.current) {
-        // the user filtered before the basemap finished loading (slow network, which
-        // is the phone case): frame what they asked for, not the default view
+      } else if (opening === 'filtered') {
+        // filters were already on when the map drew — from a shared link, or set
+        // before the basemap finished loading (slow network, which is the phone
+        // case): frame what was asked for, not the default view
         lastFitKey.current = fitKeyRef.current
-        if (featRef.current.length) m.fitBounds(boundsOf(featRef.current), { padding: padRef.current || 80, maxZoom: 10, duration: 0 })
+        m.fitBounds(boundsOf(featRef.current), { padding: padRef.current || 80, maxZoom: 10, duration: 0 })
       } else {
         // frame = the locations in the covered states (stray pins elsewhere would
         // zoom the opening view out to all of India)

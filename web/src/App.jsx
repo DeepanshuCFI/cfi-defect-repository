@@ -225,7 +225,7 @@ export default function App() {
           </aside>
           <main className="flex-1 relative min-w-0">
             <MapView features={filtered} frame={covered} heat={heat} onSelect={f => setSelected(f)} selectedId={selected?.properties?.id}
-              focus={focusTarget} fitKey={JSON.stringify(filters)} onViewChange={setView} />
+              focus={focusTarget} fitKey={JSON.stringify(filters)} fitOnLoad={activeFilters > 0} onViewChange={setView} />
             {filtered.length === 0 && noMatch}
             {selected && <Dossier feature={selected} meta={meta} onClose={() => setSelected(null)} />}
           </main>
@@ -236,7 +236,7 @@ export default function App() {
         <main className="flex-1 relative min-h-0">
           <MapView features={filtered} frame={covered} heat={heat} onSelect={f => { setSelected(f); setSheet('peek') }}
             selectedId={selected?.properties?.id} focus={focusTarget} fitKey={JSON.stringify(filters)}
-            onViewChange={setView} padding={{ top: 90, bottom: 120, left: 24, right: 24 }} />
+            fitOnLoad={activeFilters > 0} onViewChange={setView} padding={{ top: 90, bottom: 120, left: 24, right: 24 }} />
           <div className="absolute top-3 left-3 right-14 z-10 flex flex-col gap-2">
             <SearchBox query={query} setQuery={setQuery} results={results} onPick={pick} floating />
             <CoverageChip coverage={coverage} />

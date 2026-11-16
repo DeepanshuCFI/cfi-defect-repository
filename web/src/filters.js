@@ -83,5 +83,17 @@ export function relaxations(features, filters) {
     .sort((a, b) => a.count - b.count)
 }
 
+/**
+ * What the map frames when it first draws: a deep-linked location, the locations the
+ * filters leave, or the covered states. A link that arrives with filters in it
+ * (?district=Hardoi) used to open on the whole coverage area and leave the reader to
+ * find the district — only filters changed AFTER load were framed.
+ */
+export function openingFrame({ hasFocus, filtersActive, changedBeforeLoad, matches }) {
+  if (hasFocus) return 'focus'
+  if ((filtersActive || changedBeforeLoad) && matches > 0) return 'filtered'
+  return 'coverage'
+}
+
 /** The filters with only the place kept (state and district). */
 export const placeOnly = filters => ({ ...EMPTY, state: filters.state, district: filters.district })
