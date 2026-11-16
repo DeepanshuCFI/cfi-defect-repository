@@ -565,6 +565,27 @@ def _api_limit_hit(e: Exception) -> bool:
     return "reached your specified api usage limits" in str(e).lower()
 
 
+class ApiCredentialError(RuntimeError):
+    """A dead/revoked/forbidden API key. Must be RUN-FATAL, never per-article: a
+    silently-invalid key produced green runs that collected articles and extracted
+    nothing (audit finding, 19 Jul)."""
+
+
+def _raise_if_credential_error(e: Exception) -> None:
+    # CLI backend: llm._cli classifies the CLI's error text itself. Run 36 (2 Aug)
+    # proved the gap — a revoked oauth token arrived as BackendError and was WARN'd
+    # per article, 887 times, while the run stayed green.
+    from pipeline.llm import CredentialError
+    if isinstance(e, CredentialError):
+        raise ApiCredentialError(f"cli credential refused: {str(e)[:200]}") from e
+    # API backend: the SDK raises typed exceptions with a status code.
+    name = type(e).__name__
+    if name in ("AuthenticationError", "PermissionDeniedError"):
+        raise ApiCredentialError(f"{name}: {str(e)[:200]}") from e
+    if getattr(e, "status_code", None) in (401, 403):
+        raise ApiCredentialError(f"HTTP {e.status_code}: {str(e)[:200]}") from e
+
+
 # ------------------------------------------------------------ queue prefilter sweep
 # The free vocabulary prefilter used to run only inside the process loop, on the
 # articles the loop reached. The loop loads 1,000 defect-vocabulary-first rows and
@@ -598,27 +619,6 @@ def prefilter_sweep(store, passes, page: int = PREFILTER_SWEEP_PAGE,
         if reject:
             swept += store.set_articles_status(reject, "irrelevant", only_if="fetched")
     return {"scanned": scanned, "swept": swept}
-
-
-class ApiCredentialError(RuntimeError):
-    """A dead/revoked/forbidden API key. Must be RUN-FATAL, never per-article: a
-    silently-invalid key produced green runs that collected articles and extracted
-    nothing (audit finding, 19 Jul)."""
-
-
-def _raise_if_credential_error(e: Exception) -> None:
-    # CLI backend: llm._cli classifies the CLI's error text itself. Run 36 (2 Aug)
-    # proved the gap — a revoked oauth token arrived as BackendError and was WARN'd
-    # per article, 887 times, while the run stayed green.
-    from pipeline.llm import CredentialError
-    if isinstance(e, CredentialError):
-        raise ApiCredentialError(f"cli credential refused: {str(e)[:200]}") from e
-    # API backend: the SDK raises typed exceptions with a status code.
-    name = type(e).__name__
-    if name in ("AuthenticationError", "PermissionDeniedError"):
-        raise ApiCredentialError(f"{name}: {str(e)[:200]}") from e
-    if getattr(e, "status_code", None) in (401, 403):
-        raise ApiCredentialError(f"HTTP {e.status_code}: {str(e)[:200]}") from e
 
 
 def cmd_process(args) -> dict:
