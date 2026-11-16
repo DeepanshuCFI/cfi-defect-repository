@@ -57,7 +57,9 @@ DEFAULTS = {
 # alarm was a reader and a writer of one shape drifting apart.
 PROCESS_KEYS_READ = ("extracted", "extracted_light", "irrelevant", "failed", "loaded",
                      "stopped_reason")
-AUTO_REVIEW_KEYS_READ = ("reviewed", "auto_published", "errors")
+AUTO_REVIEW_KEYS_READ = ("reviewed", "auto_published", "errors", "stopped_reason")
+# The day's ceiling counts as "already spent" when a run begins this close to it.
+CEILING_SPENT_SHARE = 0.9
 
 
 def yield_per_1000(pins: int, articles: int) -> float | None:
@@ -95,12 +97,20 @@ def extraction_verdict(p, queued: int, min_extracted: int = 1) -> tuple[bool, st
     return True, f"this run extracted {done} ({failed} failed) with {queued} queued"
 
 
-def publishing_verdict(ar, waiting: int, min_reviewed: int = 20) -> tuple[bool, str]:
+def publishing_verdict(ar, waiting: int, min_reviewed: int = 20,
+                       ceiling_spent_before_run: bool = False) -> tuple[bool, str]:
     """Did THIS run's adjudicator work, and did it publish anything? (Pure.)
 
     `waiting` = publishable records still queued after the stage. The earlier check
     passed whenever spend was under $0.10 — which is exactly what a day of refused
-    calls looks like (25, 28 and 30 Oct 2026)."""
+    calls looks like (25, 28 and 30 Oct 2026).
+
+    `ceiling_spent_before_run`: the day's ceiling was already used up when this run
+    STARTED — a second full run in one day (a manual deploy, or the evening retry
+    after a failed morning). Judging nothing is then the design, not a fault. It is
+    only excused when the stage itself says it stopped on the budget: the same zero
+    on a run that began with budget in hand means extraction ate the reserve, which
+    is the 11-14 Jul freeze this check exists to catch."""
     if not isinstance(ar, dict):
         return False, (f"auto_review did not complete this run ({ar!r}); "
                        f"{waiting} publishable record(s) waiting")
@@ -113,6 +123,9 @@ def publishing_verdict(ar, waiting: int, min_reviewed: int = 20) -> tuple[bool, 
         return False, (f"auto_review errored on {errors} record(s) against {reviewed} "
                        "judged — the model calls are failing")
     if reviewed == 0 and waiting > 0:
+        if ceiling_spent_before_run and ar.get("stopped_reason") == "budget":
+            return True, (f"the day's ceiling was already spent when this run began; "
+                          f"{waiting} publishable record(s) wait for the next run")
         return False, (f"auto_review judged 0 records with {waiting} publishable "
                        "record(s) waiting — the adjudicator is starved or broken")
     if reviewed >= min_reviewed and pub == 0:
@@ -186,8 +199,12 @@ def collect_checks(current: dict | None = None) -> list[tuple[str, bool, str]]:
                              and a.clean_text is not null and i.geom is not null
                              and i.geocode_confidence >= %s""", (floor,))
             waiting = int(cur.fetchone()[0])
+            from pipeline import llmcost
+            spent_before = (float(current.get("llm_spend_at_start_usd") or 0)
+                            >= CEILING_SPENT_SHARE * llmcost.budget())
             ok, detail = publishing_verdict(current.get("auto_review"), waiting,
-                                            cfg["min_reviewed_for_publish_check"])
+                                            cfg["min_reviewed_for_publish_check"],
+                                            ceiling_spent_before_run=spent_before)
             out.append(("publishing_alive", ok, detail))
             ok, detail = extraction_verdict(p_now, fetched, cfg["min_extracted_last_run"])
             out.append(("extraction_alive", ok, detail))

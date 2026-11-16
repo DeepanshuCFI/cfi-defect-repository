@@ -202,3 +202,57 @@ def test_cmd_daily_hands_health_this_runs_counters():
 
     from pipeline import run as run_mod
     assert "health.run(stats)" in inspect.getsource(run_mod.cmd_daily)
+
+
+# ------------------------------------- a second full run in one day (16 Nov 2026)
+SPENT = {"reviewed": 0, "auto_published": 0, "errors": 0, "stopped_reason": "budget"}
+
+
+def test_a_second_run_whose_ceiling_was_already_spent_is_not_a_fault():
+    """16 Nov: the site was redeployed by a manual run in the afternoon. The morning
+    run had used the day's ceiling, so the review stage stopped at its first record
+    — and the alert read that as a broken adjudicator."""
+    ok, detail = health.publishing_verdict(SPENT, waiting=428, ceiling_spent_before_run=True)
+    assert ok and "already spent" in detail and "428" in detail
+
+
+def test_the_same_zero_on_a_run_that_began_with_budget_is_still_the_july_freeze():
+    """Negative control. 11-14 Jul: extraction consumed the whole ceiling inside the
+    run and nothing was judged. That must keep alerting."""
+    assert not health.publishing_verdict(SPENT, waiting=428, ceiling_spent_before_run=False)[0]
+
+
+def test_a_spent_ceiling_excuses_only_a_budget_stop():
+    """With the ceiling spent, zero verdicts for any OTHER reason is still a fault:
+    refused calls, a stage that judged nothing without saying why, a usage limit."""
+    spent = dict(ceiling_spent_before_run=True)
+    assert not health.publishing_verdict({**SPENT, "stopped_reason": None}, 428, **spent)[0]
+    assert not health.publishing_verdict({**SPENT, "errors": 200, "stopped_reason": None}, 428, **spent)[0]
+    assert not health.publishing_verdict({**SPENT, "stopped_reason": "usage_limit",
+                                          "api_limit_hit": True}, 428, **spent)[0]
+    assert not health.publishing_verdict("FAILED", 428, **spent)[0]
+
+
+def test_the_checks_read_the_spend_the_run_started_with(monkeypatch):
+    from pipeline import llmcost
+    monkeypatch.setattr(llmcost, "budget", lambda: 20.0)
+    answers = lambda: [(625,), (13134, 0, 0), (NOW - timedelta(days=1), 10, NOW), (428,),   # noqa: E731
+                       (484,), (250,), (5775, 866)]
+    second = {"process": {**GOOD_PROCESS, "extracted": 0, "extracted_light": 0, "irrelevant": 0},
+              "auto_review": SPENT, "llm_spend_at_start_usd": 20.06}
+    checks, _ = _checks(monkeypatch, answers(), second)
+    assert checks["publishing_alive"][0], checks["publishing_alive"][1]
+    first = {**second, "llm_spend_at_start_usd": 0.0}
+    checks, _ = _checks(monkeypatch, answers(), first)
+    assert not checks["publishing_alive"][0], "a run that began with budget must still alert"
+
+
+def test_the_review_stage_says_why_it_stopped_and_cmd_daily_records_the_starting_spend():
+    import inspect
+
+    from pipeline import run as run_mod
+    from pipeline.processing import auto_review as ar
+    src = inspect.getsource(ar._run) if hasattr(ar, "_run") else inspect.getsource(ar.run)
+    assert 'stats["stopped_reason"] = "budget"' in src
+    assert 'stats["stopped_reason"] = "usage_limit"' in src
+    assert 'stats["llm_spend_at_start_usd"]' in inspect.getsource(run_mod.cmd_daily)
