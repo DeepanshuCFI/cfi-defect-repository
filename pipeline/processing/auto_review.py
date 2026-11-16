@@ -138,12 +138,20 @@ def pending_query(gate: dict, limit: int) -> tuple[str, tuple]:
 
 def run(limit: int = 200) -> dict:
     """Apply mode: adjudicate the queue, apply decide(), audit-log every action."""
+    stats = {"reviewed": 0, "auto_published": 0, "rejected": 0, "machine_ok": 0,
+             "left_for_human": 0, "archived": 0, "errors": 0}
+    try:
+        return _run(limit, stats)
+    except Exception as exc:
+        exc.partial_stats = dict(stats)     # what was done before a run-fatal error
+        raise
+
+
+def _run(limit: int, stats: dict) -> dict:
     import json as _json
 
     from pipeline import configload
     from pipeline.db import connect
-    stats = {"reviewed": 0, "auto_published": 0, "rejected": 0, "machine_ok": 0,
-             "left_for_human": 0, "archived": 0, "errors": 0}
     with connect() as conn, conn.cursor() as cur:
         cur.execute(*pending_query(configload.settings()["confidence_gate"], limit))
         rows = cur.fetchall()
@@ -162,10 +170,15 @@ def run(limit: int = 200) -> dict:
             try:
                 verdict = adjudicate(text, ext)
             except Exception as e:
-                from pipeline.run import _raise_if_credential_error
+                from pipeline.run import _api_limit_hit, _raise_if_credential_error
                 _raise_if_credential_error(e)   # dead key must fail the run, not the item
-                if "reached your specified api usage limits" in str(e).lower():
-                    print("  API MONTHLY LIMIT hit — stopping; queue waits for tomorrow")
+                # Same test the process stage uses. Until 16 Nov 2026 this stage only
+                # knew the API's monthly-limit sentence, so a subscription limit was
+                # WARN'd once per record (200 refused on 25 and 30 Oct) and the run
+                # stayed green.
+                if _api_limit_hit(e):
+                    print(f"  USAGE LIMIT or network block — stopping; queue waits "
+                          f"for the next run ({str(e)[:120]})")
                     stats["api_limit_hit"] = True
                     break
                 print(f"  WARN auto-review failed #{iid}: {e}")

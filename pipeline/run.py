@@ -565,6 +565,19 @@ def _api_limit_hit(e: Exception) -> bool:
     return "reached your specified api usage limits" in str(e).lower()
 
 
+def limit_canary(stage_name: str) -> str:
+    """The run-failing message for a stage that stopped on a usage limit or an
+    outlasting network block. Backend-aware: on the subscription there is no console
+    limit to raise and the token is fine. (Pure for testability.)"""
+    from pipeline import llm
+    if llm.backend() == "cli":
+        return (f"{stage_name} stopped early: the Claude subscription refused calls "
+                "(usage limit, or a network block that outlasted the retries). The "
+                "token is fine — do NOT refresh it. Unfinished items resume next run")
+    return (f"{stage_name} stopped early: Anthropic monthly spend limit was hit — "
+            "raise the console limit or the pipeline stalls until month end")
+
+
 class ApiCredentialError(RuntimeError):
     """A dead/revoked/forbidden API key. Must be RUN-FATAL, never per-article: a
     silently-invalid key produced green runs that collected articles and extracted
@@ -670,7 +683,8 @@ def cmd_process(args) -> dict:
             except Exception as e:
                 _raise_if_credential_error(e)
                 if _api_limit_hit(e):
-                    print("  API MONTHLY LIMIT hit — stopping; queue waits for tomorrow")
+                    print(f"  USAGE LIMIT or network block — stopping; queue waits for the "
+                          f"next run ({str(e)[:120]})")
                     stats["api_limit_hit"] = True
                     stopped_reason = "api_monthly_limit"
                     break
@@ -697,7 +711,8 @@ def cmd_process(args) -> dict:
             except Exception as e:
                 _raise_if_credential_error(e)
                 if _api_limit_hit(e):
-                    print("  API MONTHLY LIMIT hit — stopping; queue waits for tomorrow")
+                    print(f"  USAGE LIMIT or network block — stopping; queue waits for the "
+                          f"next run ({str(e)[:120]})")
                     stats["api_limit_hit"] = True
                     stopped_reason = "api_monthly_limit"
                     break
@@ -738,6 +753,13 @@ def cmd_process(args) -> dict:
         stats["loaded"] = len(arts)
         stats["stopped_reason"] = stopped_reason
         return stats
+    except Exception as exc:
+        # A run-fatal error (dead credential) must not erase what the stage had
+        # already done: cmd_daily's stage() files these under process_partial.
+        done = locals().get("stats")
+        if isinstance(done, dict):
+            exc.partial_stats = dict(done)
+        raise
     finally:
         store.close()
 
@@ -889,9 +911,15 @@ def cmd_daily(args) -> None:
         nonlocal ok
         try:
             stats[name] = fn() or "done"
-        except Exception:
+        except Exception as exc:
             ok = False
             stats[name] = "FAILED"
+            # Counters the stage reached before it raised. 13 Nov 2026: auto_review
+            # published 33 records, then one refused call failed the stage and the
+            # run recorded only the string "FAILED".
+            partial = getattr(exc, "partial_stats", None)
+            if isinstance(partial, dict):
+                stats[f"{name}_partial"] = partial
             err = f"{name}: " + traceback.format_exc()[-800:]
             stats.setdefault("errors", []).append(err)
             print(f"STAGE FAILED ({err})")
@@ -1059,8 +1087,11 @@ def cmd_daily(args) -> None:
         if p_verdict:
             canaries.append(p_verdict)
         if p_stats.get("api_limit_hit"):
-            canaries.append("Anthropic monthly spend limit was hit — raise the console "
-                            "limit or the pipeline stalls until month end")
+            canaries.append(limit_canary("process"))
+
+    ar_stats = stats.get("auto_review")
+    if isinstance(ar_stats, dict) and ar_stats.get("api_limit_hit"):
+        canaries.append(limit_canary("auto_review"))
 
     if stats.get("export") == "FAILED":
         canaries.append("export failed — the deployed site may be stale or empty")
