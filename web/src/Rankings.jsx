@@ -12,13 +12,13 @@ export default function Rankings({ features, meta, onOpen }) {
 
   const csv = () => {
     const head = ['rank', 'score', 'tier', 'location_known_as', 'pinned_to', 'road_name', 'city',
-      'district', 'state', 'public_reports', 'records_not_shown', 'fatalities', 'injuries', 'first_report',
+      'district', 'state', 'public_reports', 'fatalities', 'injuries', 'first_report',
       'last_report', 'dominant_defects', 'lat', 'lon']
     const lines = rows.map((f, ix) => {
       const p = f.properties
       const [lon, lat] = f.geometry.coordinates
       return [ix + 1, p.score, p.tier, p.precision || 'unchecked', q(p.place), q(p.road_name), q(p.city),
-        q(p.district), q(p.state), p.incidents, p.records_hidden ?? 0, p.fatalities, p.injuries, p.first, p.last,
+        q(p.district), q(p.state), p.incidents, p.fatalities, p.injuries, p.first, p.last,
         q((p.defects || []).map(d => meta.defect_labels[d] || d).join('; ')), lat, lon].join(',')
     })
     const blob = new Blob([head.join(',') + '\n' + lines.join('\n')], { type: 'text/csv' })

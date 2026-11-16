@@ -181,7 +181,8 @@ def run(limit: int = 200) -> dict:
     from pipeline import configload
     from pipeline.db import connect
     stats = {"reviewed": 0, "auto_published": 0, "rejected": 0, "machine_ok": 0,
-             "left_for_human": 0, "archived": 0, "errors": 0, "parked_unpublishable": 0}
+             "left_for_human": 0, "archived": 0, "errors": 0, "parked_unpublishable": 0,
+             "stopped_reason": None}      # why the loop ended early, if it did
     with connect() as conn, conn.cursor() as cur:
         stats["parked_unpublishable"] = park_unpublishable(cur)
         conn.commit()
@@ -195,6 +196,7 @@ def run(limit: int = 200) -> dict:
             if llmcost.over():
                 print(f"  BUDGET STOP in auto-review: ${llmcost.spent():.2f} >= "
                       f"${llmcost.budget():.2f} — remaining items wait for tomorrow")
+                stats["stopped_reason"] = "budget"
                 break
             cur.execute("""select defect_type, evidence_snippet from incident_defect
                            where incident_id=%s""", (iid,))
@@ -219,6 +221,7 @@ def run(limit: int = 200) -> dict:
                     print(f"  USAGE LIMIT or network block — stopping; queue waits "
                           f"for the next run ({str(e)[:120]})")
                     stats["api_limit_hit"] = True
+                    stats["stopped_reason"] = "usage_limit"
                     break
                 print(f"  WARN auto-review failed #{iid}: {e}")
                 stats["errors"] += 1

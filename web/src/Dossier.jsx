@@ -45,9 +45,7 @@ export default function Dossier({ feature, meta, onClose, mobile }) {
     try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 1500) }
     catch { window.prompt('Copy this link', link) }
   }
-  const hidden = Number(p.records_hidden || 0)
   const precision = PRECISION_LABEL[p.precision] ? p.precision : 'unchecked'
-  const hiddenCrashes = Number(p.hidden_casualty_crashes_6mo || 0)
 
   return (
     <div className={mobile
@@ -109,13 +107,12 @@ export default function Dossier({ feature, meta, onClose, mobile }) {
         {(members || []).map(i => <Report key={i.id} i={i} />)}
       </div>
 
-      {hidden > 0 && (
-        <div className="mx-5 mb-3 rounded-xl bg-brand-soft border border-border px-4 py-3 text-[12px] text-muted-foreground">
-          Also {plural(hidden, 'record')} at this location {hidden === 1 ? 'is' : 'are'} not shown publicly: crash reports that
-          make no infrastructure claim{hiddenCrashes ? `, ${hiddenCrashes} of them with casualties in the last 6 months` : ''}.
-          They never count toward the score.
-        </div>
-      )}
+      {/* The "also N records here are not shown publicly" line is withheld (16 Nov 2026).
+          The count is of crash-only records, and those were NOT re-checked by the name
+          guard — only public reports were — so many still sit on a street called "Road"
+          in the district town. Saying they are "at this location" would restate the
+          very error the guard removed. The export still carries records_hidden; the
+          line returns when the non-public pins have been re-checked. */}
 
       {bd && (
         <details className="px-5 py-3 border-t border-border group">

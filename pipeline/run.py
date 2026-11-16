@@ -1009,6 +1009,10 @@ def cmd_daily(args) -> None:
     # so a retry run can never double the daily cap.
     with connect() as conn, conn.cursor() as cur:
         prior = prior_spend_today(cur, run_id)
+    # Recorded so the health stage can tell "the ceiling was already spent when this
+    # run began" (a second run in one day: nothing to judge, by design) from "this run
+    # spent it all on extraction" (the 11-14 Jul freeze: a fault).
+    stats["llm_spend_at_start_usd"] = round(float(prior or 0), 2)
     if prior:
         llmcost.set_baseline(prior)
         print(f"budget: ${prior:.2f} already spent today (IST) by earlier runs "
