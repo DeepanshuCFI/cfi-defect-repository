@@ -44,7 +44,11 @@ VULNERABLE = {"pedestrian", "cyclist", "two_wheeler"}
 #      with repeat crashes — real, useful to a PWD/NHAI engineer, but road-level.
 # Scoring components (frequency, casualties, ...) are unchanged; only the flag and the
 # breakdown metadata move.
-ESCALATION_INCIDENT_SQL = "(i.fatalities > 0 or i.injuries > 0) and i.geocode_qualifier is null"
+# 16 Nov 2026: a record the reviewer REJECTED (not a road crash, not India, extraction
+# contradicts the article) is not evidence of anything and no longer votes; 14 such
+# votes sat behind 13 public flags.
+ESCALATION_INCIDENT_SQL = ("(i.fatalities > 0 or i.injuries > 0) and i.geocode_qualifier is null"
+                           " and i.verification_status <> 'rejected'")
 POINT_PRECISION_MIN_DISTINCT = 3
 
 # Scoring inputs come from PUBLIC members only (launch review, 16 Oct 2026). The score

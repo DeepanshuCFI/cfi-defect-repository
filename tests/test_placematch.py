@@ -64,21 +64,23 @@ def test_a_named_town_is_an_area():
     stated = _stated("Baifariya-Bilgram Rajwaha link road, Bilgram block, Hardoi district",
                      district="Hardoi")
     hit = {"name": "Bilgram", "ftype": "place", "ctx": {"place": "Bilgram"}}
-    assert pm.evidence(stated, hit) == ("area", "bilgram")
+    assert pm.evidence(stated, hit) == ("town", "bilgram")
+    village = {"name": "Bilgram", "ftype": "locality", "ctx": {}}
+    assert pm.evidence(stated, village) == ("locality", "bilgram")
 
 
 def test_a_generic_street_inside_the_named_locality_is_an_area_not_a_road():
     stated = _stated("near Kurseli village, Hardoi district", district="Hardoi")
     hit = {"name": "Road", "ftype": "street",
            "ctx": {"street": "Road", "locality": "Kurseli", "place": "Hardoi"}}
-    assert pm.evidence(stated, hit) == ("area", "kurseli")
+    assert pm.evidence(stated, hit) == ("locality", "kurseli")
 
 
 def test_a_report_about_the_district_town_itself_may_use_the_towns_name():
     stated = _stated("Station Road, Hardoi city, Uttar Pradesh", city="Hardoi", district="Hardoi")
     assert _words(stated) == {"hardoi"} and not stated.weak
     town = {"name": "Hardoi", "ftype": "place", "ctx": {"place": "Hardoi"}}
-    assert pm.evidence(stated, town) == ("area", "hardoi")
+    assert pm.evidence(stated, town) == ("town", "hardoi")
     # ...but a generic street filed under the town is not the town: Mapbox files
     # village streets 15 km out under the district town (audit rows 48500, 46777)
     street = {"name": "Main Road", "ftype": "street",
@@ -113,7 +115,7 @@ def test_missing_input_rejects_instead_of_passing():
     nothing = pm.stated_names(None, None, None, "Hardoi", UP)
     assert not nothing and pm.evidence(nothing, hit) == (None, None)     # nothing stated
     bilgram = _stated("Bilgram block, Hardoi district", district="Hardoi")
-    assert pm.evidence(bilgram, hit) == ("area", "bilgram")              # the control
+    assert pm.evidence(bilgram, hit) == ("town", "bilgram")              # the control
     assert pm.evidence(bilgram, {}) == (None, None)                      # hit has no name
     assert pm.evidence(bilgram, {"name": None, "ftype": None, "ctx": None}) == (None, None)
     assert pm.evidence(bilgram, {"name": "Bilgram", "ftype": "district", "ctx": {}}) \

@@ -15,10 +15,17 @@ Hardoi held 78 reports naming 74 different roads.
 The check has no model in it. A hit is accepted only on NAME EVIDENCE, and what
 matched says how precise the pin is, which is what the map must show:
 
-    spot     coordinates in the text, or an address whose road name matches
-    road     a street whose own name matches the road the article names
-    area     the hit is, or lies inside, a named village / locality / town that matches
-    highway  only a numbered highway matched: the right road, an arbitrary point on it
+    spot      coordinates in the text, or an address whose road name matches
+    road      a street whose own name matches the road the article names
+    locality  the hit is, or lies inside, a named village or neighbourhood that matches
+    town      the hit is a named town (the provider's "place": a town and its
+              surrounding tehsil, typically tens of km across) that matches
+    highway   only a numbered highway matched: the right road, an arbitrary point on
+              it, so no pin at all
+
+"locality" and "town" are both shown to readers as an AREA; they are kept apart
+because one is a few km across and the other is not (measured 16 Nov 2026 on 1,761
+answers: locality features span 3.7 km at the median, place features 58 km).
 
 Three traps found by replaying the hand-audited pins (16 Nov 2026), each of which a
 plain "shares a word" rule walks into:
@@ -86,6 +93,8 @@ _WORD = re.compile(r"[a-z0-9]+")
 MIN_TOKEN = 4          # shorter words (ram, pur, new) match too much to be evidence
 SIMILAR_AT = 0.84      # sahpur ~ shahpur ~ shahapur; bilgram ~ bilgraam
 AREA_FTYPES = frozenset({"place", "locality", "neighborhood"})
+PRECISIONS = ("spot", "road", "locality", "town", "highway")   # the stored vocabulary
+PINNED = frozenset({"spot", "road", "locality", "town"})        # classes that carry a pin
 STREET_FTYPES = frozenset({"street", "address"})
 
 
@@ -188,6 +197,7 @@ def evidence(stated: Stated, hit: dict) -> tuple[str | None, str | None]:
     near = (_matches(strong_place, ctx.get("neighborhood"))
             + _matches(strong_place, ctx.get("locality")))
     in_town = near + _matches(strong_place, ctx.get("place"))
+    area = "locality" if near else "town"     # how tightly the context places the hit
 
     if ftype in STREET_FTYPES:
         on_road = _matches(stated.road, name)
@@ -197,21 +207,22 @@ def evidence(stated: Stated, hit: dict) -> tuple[str | None, str | None]:
         any_word = on_road or _matches(stated.place, name)
         if any_word and in_town:
             # a weak or landmark word, AND the hit lies in a place the article names
-            return ("road" if on_road else "area"), any_word[0]
+            return ("road" if on_road else area), any_word[0]
         if len(on_road) >= 2 and not all(_is_highway_ref(t) for t in on_road):
             return "road", on_road[0]
         if near:
             # generic street ("Road") inside the named village or neighbourhood
-            return "area", near[0]
+            return "locality", near[0]
         if any(_is_highway_ref(t) for t in on_road):
             return "highway", next(t for t in on_road if _is_highway_ref(t))
         return None, None
 
     if ftype in AREA_FTYPES:
+        kind = "town" if ftype == "place" else "locality"
         named = _matches(strong_place, name)
         if named:
-            return "area", named[0]
+            return kind, named[0]
         weak_named = _matches(stated.place, name)
         if len(weak_named) >= 2 or (weak_named and in_town):
-            return "area", weak_named[0]
+            return kind, weak_named[0]
     return None, None
