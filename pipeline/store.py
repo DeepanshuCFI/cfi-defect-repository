@@ -166,6 +166,15 @@ class DBStore:
             cols = [d.name for d in cur.description]
             return [dict(zip(cols, r)) for r in cur.fetchall()]
 
+    def articles_page(self, status: str, after_id: int = 0, limit: int = 1000) -> list[dict]:
+        """One page of (id, clean_text) for a status, in id order — keyset paging, so a
+        caller can walk the whole queue without holding it and without OFFSET."""
+        with self.conn.cursor() as cur:
+            cur.execute("""select id, clean_text from source_article
+                           where processing_status = %s and id > %s
+                           order by id limit %s""", (status, after_id, limit))
+            return [{"id": r[0], "clean_text": r[1]} for r in cur.fetchall()]
+
     def set_article_status(self, article_id, status: str) -> None:
         with self.conn.cursor() as cur:
             cur.execute("update source_article set processing_status=%s where id=%s",
@@ -453,6 +462,12 @@ class JsonlStore:
             out.sort(key=lambda a: 0 if any(
                 t in (a.get("clean_text") or "") for t in priority_terms) else 1)
         return out[:limit]
+
+    def articles_page(self, status: str, after_id: int = 0, limit: int = 1000) -> list[dict]:
+        rows = sorted((r for r in self._rows
+                       if r.get("processing_status") == status and r["id"] > after_id),
+                      key=lambda r: r["id"])
+        return [{"id": r["id"], "clean_text": r.get("clean_text")} for r in rows[:limit]]
 
     def set_article_status(self, article_id, status: str) -> None:
         for r in self._rows:
