@@ -565,6 +565,41 @@ def _api_limit_hit(e: Exception) -> bool:
     return "reached your specified api usage limits" in str(e).lower()
 
 
+# ------------------------------------------------------------ queue prefilter sweep
+# The free vocabulary prefilter used to run only inside the process loop, on the
+# articles the loop reached. The loop loads 1,000 defect-vocabulary-first rows and
+# stops on its daily ceiling after about 80, so it never reached the articles that
+# fail the filter: `prefiltered: 0` on every run, while 6,047 of the 14,086 queued
+# articles (16 Nov 2026) were ones the filter would discard at no cost. They sat in
+# the queue, inflated every count of it, and hid what was actually waiting.
+PREFILTER_SWEEP_PAGE = 1000
+PREFILTER_SWEEP_MAX_ROWS = 60_000     # a bound, not a target: ~4x today's queue
+
+
+def prefilter_sweep(store, passes, page: int = PREFILTER_SWEEP_PAGE,
+                    max_rows: int = PREFILTER_SWEEP_MAX_ROWS) -> dict:
+    """Walk the whole 'fetched' queue once and retire every article the free
+    prefilter rejects. No model call; the test is `passes`, the very function the
+    process loop applies, so the sweep changes WHEN an article is discarded, never
+    WHETHER. Blank articles are left for the loop, which marks them 'failed'.
+
+    The status write is guarded on 'fetched', so an article another process picked
+    up in the meantime is left alone."""
+    scanned = swept = 0
+    after = 0
+    while scanned < max_rows:
+        rows = store.articles_page("fetched", after_id=after, limit=page)
+        if not rows:
+            break
+        after = rows[-1]["id"]
+        scanned += len(rows)
+        reject = [r["id"] for r in rows
+                  if (r.get("clean_text") or "").strip() and not passes(r["clean_text"])]
+        if reject:
+            swept += store.set_articles_status(reject, "irrelevant", only_if="fetched")
+    return {"scanned": scanned, "swept": swept}
+
+
 class ApiCredentialError(RuntimeError):
     """A dead/revoked/forbidden API key. Must be RUN-FATAL, never per-article: a
     silently-invalid key produced green runs that collected articles and extracted
@@ -610,14 +645,26 @@ def cmd_process(args) -> dict:
         # defect articles sat outside it while the budget chewed the 18-20 Jul tail).
         defect_terms = [t for lang in configload.keywords().values()
                         for t in lang.get("infra_defect", [])]
+        sweep = {"scanned": 0, "swept": 0}
+        if proc_cfg.get("body_prefilter", True):
+            try:
+                sweep = prefilter_sweep(store, prefilter.passes)
+                print(f"prefilter sweep: {sweep['swept']} of {sweep['scanned']} queued "
+                      f"article(s) retired without a model call")
+            except Exception as e:      # housekeeping must never cost the day's extraction
+                print(f"  WARN prefilter sweep failed (queue left as it was): {e}")
         arts = store.articles_by_status("fetched", limit=args.limit,
                                         priority_terms=defect_terms)
         n_priority = sum(1 for a in arts if any(
             t in (a.get("clean_text") or "") for t in defect_terms))
         print(f"processing {len(arts)} fetched article(s) "
               f"({n_priority} defect-vocabulary, first in line)…")
+        # prefilter_swept is deliberately its own key: the did-work canary counts
+        # `prefiltered` (the in-loop filter) as work, and a sweep that retires a few
+        # hundred junk articles must not make a day of refused model calls look busy.
         stats = {"prefiltered": 0, "irrelevant": 0, "extracted": 0, "extracted_light": 0,
-                 "skipped_pure_crash": 0, "failed": 0, "snippets_dropped": 0}
+                 "skipped_pure_crash": 0, "failed": 0, "snippets_dropped": 0,
+                 "prefilter_swept": sweep["swept"], "prefilter_scanned": sweep["scanned"]}
         stopped_reason = None                 # why the loop broke early, if it did
         from pipeline import llmcost
         # Extraction may spend only its SHARE of the daily budget; the rest is reserved
