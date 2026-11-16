@@ -199,11 +199,17 @@ def main() -> None:
         # ---- public incidents with defects + all sources
         cur.execute("""
           select i.id, i.cluster_id, i.crash_date, i.location_text_best, i.road_name,
-                 i.road_type, i.admin_state, i.admin_district, i.fatalities, i.injuries,
+                 i.road_type, coalesce(i.admin_state, a.state),
+                 coalesce(i.admin_district, a.district), i.fatalities, i.injuries,
                  i.victim_types, i.narrative_summary, i.verification_status,
                  i.extraction_confidence, i.geocode_confidence, i.geocode_method,
                  i.geocode_precision, i.geocode_match, (i.geom is not null)
-          from public_incident i""")
+          from public_incident i
+          left join source_article a on a.id = i.primary_source_id""")
+        # State and district fall back to the source article's (the district the
+        # collector queried) when extraction left them blank — the same anchor the
+        # geocoder uses. Without it a report with no extracted state would be counted
+        # as outside coverage and vanish from the site (18 such reports, 16 Nov 2026).
         cols = ["id", "hotspot_id", "date", "location", "road_name", "road_type",
                 "state", "district", "fatalities", "injuries", "victim_types",
                 "summary", "verification", "extraction_conf", "geocode_conf",
