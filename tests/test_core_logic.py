@@ -1092,12 +1092,22 @@ def test_health_process_paths_exist_in_what_cmd_process_returns(monkeypatch, tmp
 
 
 def test_health_auto_review_paths_exist_in_auto_review_stats():
-    two, _ = _health_stage_stats_paths()
-    keys_read = {k for stage, k in two if stage == "auto_review"}
-    assert keys_read, "regex found no ->'auto_review'->> paths — health.py changed shape?"
+    # Since 16 Nov 2026 health judges the CURRENT run's counters in Python, not the
+    # previous run's through SQL paths, so the keys it reads are declared rather than
+    # found by regex. The contract is the same: reader and writer of one shape.
+    from pipeline.processing import health
+    keys_read = set(health.AUTO_REVIEW_KEYS_READ)
+    assert keys_read, "health.py declares no auto_review keys — did it change shape?"
     from pipeline.processing import auto_review as ar
     missing = keys_read - _stats_literal_keys(ar.run)
     assert not missing, f"health.py reads {missing} but auto_review.run does not count them"
+
+
+def test_health_declared_process_keys_exist_in_what_cmd_process_returns(monkeypatch, tmp_path):
+    from pipeline.processing import health
+    out = _run_cmd_process_on_empty_queue(monkeypatch, tmp_path)
+    missing = set(health.PROCESS_KEYS_READ) - set(out)
+    assert not missing, f"health.py reads {missing} but cmd_process does not record them"
 
 
 def test_health_paths_point_at_stages_and_keys_cmd_daily_records():
@@ -1547,10 +1557,13 @@ def test_defect_vocab_pattern_is_lowercase_escaped_and_multilingual():
 def test_yield_floors_are_configured_defaults_and_in_the_settings_file():
     import json as _j
     from pipeline import configload
-    assert _health.DEFAULTS["min_yield_per_1000_7d"] == 10
-    assert _health.DEFAULTS["min_defect_vocab_share_7d"] == 0.05
+    assert _health.DEFAULTS["min_yield_per_1000_read_7d"] == 40
+    assert _health.DEFAULTS["min_defect_vocab_share_7d"] == 0.08
     h = _j.load(open(configload.CONFIG_DIR / "config_settings.json"))["settings"]["health"]
-    assert h["min_yield_per_1000_7d"] == 10 and h["min_defect_vocab_share_7d"] == 0.05
+    assert h["min_yield_per_1000_read_7d"] == 40 and h["min_defect_vocab_share_7d"] == 0.08
+    # every threshold in the settings file is one the code reads, and agrees with it
+    for key, value in h.items():
+        assert _health.DEFAULTS[key] == value, f"{key} drifted between file and code"
 # ------------------------------------------------- outlet blocklist (step 4, 16 Oct 2026)
 # 3.5-month yield by outlet: ETV Bharat 5.0, News18 Hindi 3.5, Navbharat Times 2.7, ABP
 # News 4.4, News4Nation 4.5 pins per 1,000 articles against 40 overall — 3.9% of the

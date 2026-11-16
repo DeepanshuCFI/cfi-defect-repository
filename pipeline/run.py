@@ -1006,7 +1006,7 @@ def cmd_daily(args) -> None:
     stage("recompute", lambda: cmd_recompute(argparse.Namespace()))
     stage("export", export_main)
     stage("hygiene", _hygiene)
-    stage("health", health.run)
+    stage("health", lambda: health.run(stats))    # judges THIS run's counters
     stats["llm_spend_usd"] = round(llmcost.spent(), 2)
 
     # CANARIES (audit finding, 19 Jul): a run that collects nothing, extracts nothing,
