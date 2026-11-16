@@ -629,10 +629,16 @@ def cmd_process(args) -> dict:
         try:
             from pipeline.db import connect as _c
             with _c() as _conn, _conn.cursor() as _cur:
+                # Count what auto_review will actually judge: records below the
+                # location bar are archived without a call (auto_review.pending_query),
+                # so reserving budget for them starved extraction for nothing.
+                from pipeline.processing.auto_review import GEOCODE_FLOOR
                 _cur.execute("""select count(*) from incident i
                                 join source_article a on a.id = i.primary_source_id
                                 where i.verification_status = 'auto'
-                                  and a.clean_text is not null""")
+                                  and a.clean_text is not null
+                                  and i.geom is not null
+                                  and i.geocode_confidence >= %s""", (GEOCODE_FLOOR,))
                 pending_adj = int(_cur.fetchone()[0])
         except Exception as e:            # jsonl/no-DB mode: fall back to the flat split
             print(f"  (reserve sizing unavailable: {e}; using configured share)")

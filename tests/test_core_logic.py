@@ -1386,13 +1386,13 @@ def test_adjudication_queue_puts_gate_passing_rows_first():
     assert ") desc" in order                                    # true (publishable) sorts first …
     assert "coalesce(" in order                                 # … and a NULL confidence never does
     assert low.rstrip().endswith("limit %s")                    # LIMIT stays in SQL: no 2k-row body stream
-    assert params == (0.7, 0.6, 200)                            # thresholds come from the live gate config
+    assert params == (0.6, 0.7, 0.6, 200)                       # location bar, then the live gate config
 
 
 def test_adjudication_queue_mirrors_the_publish_gate_config():
     sql, params = pending_query({"extraction_confidence_min": 0.8, "geocode_confidence_min": 0.9,
                                  "require_infra_implicated": False}, limit=50)
-    assert params == (0.8, 0.9, 50)
+    assert params == (0.6, 0.8, 0.9, 50)
     assert "infra_implicated" not in sql.lower().split("order by", 1)[1]   # gate says infra is optional
 
 

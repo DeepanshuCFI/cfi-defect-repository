@@ -80,11 +80,18 @@ SYSTEM = (
 )
 
 
+# The location bar a record must clear to be published, whatever the verdict. One
+# constant, because three things must agree on it: decide() (never publishes below
+# it), pending_query() (never spends a call below it) and PARK_UNPUBLISHABLE_SQL
+# (archives below it without a call).
+GEOCODE_FLOOR = 0.6
+
+
 def decide(verdict: dict, geocode_conf: float | None) -> str | None:
     """Pure policy (unit-tested): map a verdict to an applied status, or None to
     leave the item for humans. Conservatism rails live HERE, in one place."""
     v, conf = verdict.get("verdict"), float(verdict.get("confidence") or 0)
-    if v == "confirm_publish" and conf >= 0.75 and (geocode_conf or 0) >= 0.6:
+    if v == "confirm_publish" and conf >= 0.75 and (geocode_conf or 0) >= GEOCODE_FLOOR:
         return "auto_published"
     if v == "confirm_reject" and conf >= 0.85:
         return "rejected"
@@ -93,7 +100,7 @@ def decide(verdict: dict, geocode_conf: float | None) -> str | None:
     return None
 
 
-def route_unresolved(geocode_conf: float | None, bar: float = 0.6) -> str:
+def route_unresolved(geocode_conf: float | None, bar: float = GEOCODE_FLOOR) -> str:
     """Where an item goes when decide() returns None (pure, unit-tested).
 
     'needs_human' only when a human could actually publish it, i.e. the location bar
@@ -104,22 +111,22 @@ def route_unresolved(geocode_conf: float | None, bar: float = 0.6) -> str:
 
 
 def pending_query(gate: dict, limit: int) -> tuple[str, tuple]:
-    """The adjudication queue: rows that can PUBLISH first, then the rest; oldest
-    first within each group.
+    """The adjudication queue: ONLY rows that could publish, best candidates first,
+    oldest first within each group.
 
-    Oldest-first alone starved publishing (14 Oct 2026): 2,064 older pending rows
-    sat ahead of the day's fresh candidates and only 73 of them could pass the
-    publish gate — the rest are low-confidence (landmark/district-level) or missing
-    geocodes whose verdict can only ever be 'needs_human' (decide() never publishes
-    below the geocode floor). At ~400 verdicts/day the fresh publishable rows would
-    have waited ~5 days while the budget bought nothing the site could show.
+    A record below the location bar cannot be published by any verdict — decide()
+    refuses it — so a call spent on it buys nothing the site can show. 7-13 Nov 2026:
+    676 of 1,026 verdicts went to such rows and 525 of them were then archived by
+    rule anyway. They are now excluded here and archived, without a call, by
+    park_unpublishable(); the geocode rescue pass returns them to 'auto' if a better
+    location is found, and they are judged then.
 
-    The gate expression mirrors gate.publishable() for the fields known at row
-    level (located, infra implicated, both confidences at/above the config
-    minimums); the defect-tag check still happens after the verdict. coalesce()
-    matters: ORDER BY … DESC puts NULLs FIRST in Postgres, so a row with a NULL
-    confidence would otherwise jump the queue. LIMIT stays in SQL so a 2k-row
-    backlog never streams 2k article bodies to the runner."""
+    Ordering is unchanged from 14 Oct 2026: rows passing the full publish gate
+    (infra implicated, both confidences at/above the config minimums) come before
+    rows that clear the location bar only. coalesce() matters: ORDER BY … DESC puts
+    NULLs FIRST in Postgres, so a row with a NULL confidence would otherwise jump
+    the queue. LIMIT stays in SQL so a large backlog never streams thousands of
+    article bodies to the runner."""
     infra = "and r.infra_implicated" if gate.get("require_infra_implicated") else ""
     sql = f"""
       select r.id, r.location_text_best, r.fatalities, r.injuries, r.infra_implicated,
@@ -128,12 +135,43 @@ def pending_query(gate: dict, limit: int) -> tuple[str, tuple]:
       from incident r
       join source_article a on a.id = r.primary_source_id
       where a.clean_text is not null and r.verification_status = 'auto'
+        and r.geom is not null and r.geocode_confidence >= %s
       order by coalesce(r.geom is not null {infra}
                         and r.extraction_confidence >= %s
                         and r.geocode_confidence >= %s, false) desc,
                r.id
       limit %s"""
-    return sql, (gate["extraction_confidence_min"], gate["geocode_confidence_min"], limit)
+    return sql, (GEOCODE_FLOOR, gate["extraction_confidence_min"],
+                 gate["geocode_confidence_min"], limit)
+
+
+# Records in the adjudication queue that cannot publish because of WHERE they are,
+# not WHAT they say: located below the bar, or not located after a real attempt.
+# geocode_attempted_at is the guard that matters — a record the geocode stage has
+# not reached yet (it works through 1,000 a run) must stay 'auto', or a backlog day
+# would archive fresh records before anyone tried to place them.
+PARK_UNPUBLISHABLE_SQL = """
+  update incident set verification_status = 'archived', updated_at = now()
+  where verification_status = 'auto'
+    and ((geom is not null and coalesce(geocode_confidence, 0) < %s)
+         or (geom is null and geocode_attempted_at is not null))
+  returning id"""
+PARK_NOTE = ("location below the publish bar after a geocode attempt -> archived "
+             "without adjudication (no verdict could publish it; the geocode rescue "
+             "pass returns it to 'auto' if a better location is found)")
+
+
+def park_unpublishable(cur) -> int:
+    """Archive, by rule and with an audit row each, the queued records no verdict
+    could publish. Returns how many. Reversible per record through review_action."""
+    cur.execute(PARK_UNPUBLISHABLE_SQL, (GEOCODE_FLOOR,))
+    ids = [row[0] for row in cur.fetchall()]
+    if ids:
+        cur.execute("""insert into review_action (entity_type, entity_id, reviewer,
+                       action, note)
+                       select 'incident', unnest(%s::int[]), 'pipeline:rule', 'edit', %s""",
+                    (ids, PARK_NOTE))
+    return len(ids)
 
 
 def run(limit: int = 200) -> dict:
@@ -143,8 +181,13 @@ def run(limit: int = 200) -> dict:
     from pipeline import configload
     from pipeline.db import connect
     stats = {"reviewed": 0, "auto_published": 0, "rejected": 0, "machine_ok": 0,
-             "left_for_human": 0, "archived": 0, "errors": 0}
+             "left_for_human": 0, "archived": 0, "errors": 0, "parked_unpublishable": 0}
     with connect() as conn, conn.cursor() as cur:
+        stats["parked_unpublishable"] = park_unpublishable(cur)
+        conn.commit()
+        if stats["parked_unpublishable"]:
+            print(f"  parked {stats['parked_unpublishable']} record(s) below the location "
+                  f"bar — archived by rule, no adjudication call spent")
         cur.execute(*pending_query(configload.settings()["confidence_gate"], limit))
         rows = cur.fetchall()
         from pipeline import llmcost
