@@ -57,15 +57,17 @@ def test_geocode_method_always_in_controlled_vocabulary(monkeypatch):
     CHECK constraint and would have failed every geocode UPDATE."""
     from pipeline.processing import geocode as gc
     for state, span in (("", 0.5), ("Odisha", 0.5), ("Uttar Pradesh", 47.0)):
-        monkeypatch.setattr(gc, "_resolve", lambda q, s=state, sp=span: {
-            "lat": 27.5, "lon": 78.05, "state": s, "district": "Hathras",
-            "display": "x", "span_km": sp})
-        for kwargs in ({}, {"admin_state": "Uttar Pradesh", "admin_district": "Hathras"}):
-            g = gc.geocode("somewhere", **kwargs)
-            if g["geocode_method"] is not None:
-                assert g["geocode_method"] in ALLOWED_GEOCODE_METHODS, g["geocode_method"]
-            assert g["geocode_qualifier"] in (None, "unanchored", "stateless_hit",
-                                              "districtless_hit", "wide_area")
+        for ftype in ("locality", "street"):
+            monkeypatch.setattr(gc, "_resolve", lambda q, s=state, sp=span, ft=ftype: {
+                "lat": 27.5, "lon": 78.05, "state": s, "district": "Hathras",
+                "display": "x", "span_km": sp, "name": "Bisawar", "ftype": ft})
+            for kwargs in ({}, {"admin_state": "Uttar Pradesh", "admin_district": "Hathras"}):
+                g = gc.geocode("Bisawar road", **kwargs)
+                if g["geocode_method"] is not None:
+                    assert g["geocode_method"] in ALLOWED_GEOCODE_METHODS, g["geocode_method"]
+                assert g["geocode_qualifier"] in (None, "unanchored", "stateless_hit",
+                                                  "districtless_hit", "wide_area")
+                assert g["geocode_precision"] in (None, *gc.placematch.PRECISIONS)
 
 
 # ---------------------------------------------------------------- geocode anchoring
@@ -75,7 +77,8 @@ def test_unanchored_geocode_capped_below_publish_bar(monkeypatch):
     state guard cannot run, so confidence must be capped below the 0.6 gate."""
     from pipeline.processing import geocode as gc
     monkeypatch.setattr(gc, "_resolve", lambda q: {
-        "lat": 20.69553, "lon": 86.162129, "state": "Odisha", "display": "Bisawar, Odisha"})
+        "lat": 20.69553, "lon": 86.162129, "state": "Odisha", "display": "Bisawar, Odisha",
+        "name": "Bisawar", "ftype": "locality"})
     g = gc.geocode("near Bisawar village, Vidhipur road, ")
     assert g["lat"] is not None
     assert g["geocode_confidence"] <= gc.UNANCHORED_MAX_CONF < 0.6   # -> review, not public
@@ -86,7 +89,7 @@ def test_anchored_geocode_keeps_full_confidence(monkeypatch):
     from pipeline.processing import geocode as gc
     monkeypatch.setattr(gc, "_resolve", lambda q: {
         "lat": 27.5, "lon": 78.05, "state": "Uttar Pradesh", "district": "Hathras",
-        "display": "Bisawar, Hathras, UP"})
+        "display": "Bisawar, Hathras, UP", "name": "Bisawar", "ftype": "locality"})
     g = gc.geocode("near Bisawar village, Vidhipur road", admin_district="Hathras",
                    admin_state="Uttar Pradesh")
     assert g["geocode_confidence"] >= 0.6
@@ -105,7 +108,8 @@ def test_stateless_hit_capped(monkeypatch):
     # anchored query, but the HIT carries no state metadata: guard ran on nothing
     from pipeline.processing import geocode as gc
     monkeypatch.setattr(gc, "_resolve", lambda q: {
-        "lat": 27.5, "lon": 78.05, "state": "", "display": "somewhere", "span_km": 0.5})
+        "lat": 27.5, "lon": 78.05, "state": "", "display": "somewhere", "span_km": 0.5,
+        "name": "Bisawar", "ftype": "locality"})
     g = gc.geocode("near Bisawar village", admin_state="Uttar Pradesh")
     assert g["geocode_confidence"] <= gc.STATELESS_HIT_MAX_CONF < 0.6
     assert g["geocode_qualifier"] == "stateless_hit"
@@ -116,7 +120,8 @@ def test_wide_area_hit_capped(monkeypatch):
     from pipeline.processing import geocode as gc
     monkeypatch.setattr(gc, "_resolve", lambda q: {
         "lat": 28.55, "lon": 77.19, "state": "Delhi", "district": "South Delhi",
-        "display": "Outer Ring Road", "span_km": 47.0})
+        "display": "Outer Ring Road", "span_km": 47.0,
+        "name": "Outer Ring Road", "ftype": "street"})
     g = gc.geocode("Outer Ring Road", admin_state="Delhi", admin_district="South Delhi")
     assert g["geocode_confidence"] <= gc.WIDE_AREA_MAX_CONF < 0.6
     assert g["geocode_qualifier"] == "wide_area"
@@ -586,12 +591,14 @@ def test_ladder_skips_a_wrong_district_hit(monkeypatch):
         calls.append(query)
         if len(calls) == 1:                       # most-specific variant: wrong district
             return {"lat": 24.9192, "lon": 85.5367, "state": "Bihar",
-                    "district": "Nawada", "display": "Nh20 531, Nawada", "span_km": 0.5}
+                    "district": "Nawada", "display": "Nh20 531, Nawada", "span_km": 0.5,
+                    "name": "Manjha", "ftype": "locality"}
         return {"lat": 26.4641, "lon": 84.4400, "state": "Bihar",
-                "district": "Gopalganj", "display": "Gopalganj, Bihar", "span_km": 0.5}
+                "district": "Gopalganj", "display": "Manjha, Gopalganj, Bihar",
+                "span_km": 0.5, "name": "Manjha", "ftype": "locality"}
 
     monkeypatch.setattr(g, "_resolve", fake_resolve)
-    out = g.geocode("NH-531, Gopalganj, Bihar", road_name="NH-531",
+    out = g.geocode("NH-531 near Manjha, Gopalganj, Bihar", road_name="NH-531",
                     admin_district="Gopalganj", admin_state="Bihar")
     assert len(calls) > 1, "stopped at the wrong-district hit instead of descending"
     assert out["lat"] == 26.4641, "published the Nawada pin"
@@ -603,8 +610,9 @@ def test_districtless_hit_is_capped_below_the_publish_bar(monkeypatch):
     from pipeline.processing import geocode as g
     monkeypatch.setattr(g, "_resolve", lambda q: {
         "lat": 25.0, "lon": 85.0, "state": "Bihar", "district": "",
-        "display": "somewhere, Bihar", "span_km": 0.5})
-    out = g.geocode("NH-531, Gopalganj, Bihar", road_name="NH-531",
+        "display": "somewhere, Bihar", "span_km": 0.5,
+        "name": "Manjha", "ftype": "locality"})
+    out = g.geocode("NH-531 near Manjha, Gopalganj, Bihar", road_name="NH-531",
                     admin_district="Gopalganj", admin_state="Bihar")
     assert out["geocode_confidence"] <= 0.6, "a districtless hit reached the publish bar"
     assert out["geocode_qualifier"] == "districtless_hit"
@@ -754,8 +762,12 @@ def test_repair_scripts_qualifier_is_allowed_too():
 # 0.55 and making the new guard look over-strict when the cache is what is stale.
 PRE_FIX_ENTRY = {"lat": 26.46, "lon": 84.44, "state": "Bihar",
                  "display": "Gopalganj, Bihar", "span_km": 1.0}          # no 'district'
-POST_FIX_ENTRY = dict(PRE_FIX_ENTRY, district="Gopalganj")
-PROVIDER_SAID_NO_DISTRICT = dict(PRE_FIX_ENTRY, district="")
+# 16 Nov 2026: the shape grew again (name, ftype, ctx, alts — what the name-evidence
+# guard reads). An entry without them is stale in exactly the same way.
+_NAMED = {"name": "Gopalganj", "ftype": "place", "ctx": {}, "alts": []}
+POST_FIX_ENTRY = dict(PRE_FIX_ENTRY, district="Gopalganj", **_NAMED)
+PROVIDER_SAID_NO_DISTRICT = dict(PRE_FIX_ENTRY, district="", **_NAMED)
+PRE_NAME_GUARD_ENTRY = dict(PRE_FIX_ENTRY, district="Gopalganj")     # 1 Aug – 16 Nov shape
 
 
 def test_pre_fix_cache_entry_is_treated_as_a_miss():
@@ -766,6 +778,14 @@ def test_pre_fix_cache_entry_is_treated_as_a_miss():
 def test_post_fix_entry_is_served_from_cache():
     from pipeline.processing import geocode as g
     assert g._mb_cache_usable(POST_FIX_ENTRY)
+
+
+def test_an_entry_without_the_features_name_is_refetched():
+    """Every entry cached before the name guard lacks name/ftype/ctx. Served as it
+    is, it would be rejected by the guard for carrying no name — good pins would
+    vanish because the cache is stale, not because the place is unknown."""
+    from pipeline.processing import geocode as g
+    assert not g._mb_cache_usable(PRE_NAME_GUARD_ENTRY)
 
 
 def test_empty_district_is_a_real_answer_not_a_stale_one():

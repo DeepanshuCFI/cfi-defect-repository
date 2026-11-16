@@ -14,25 +14,38 @@ export const TIER_HINT = {
   critical: 'top 5% by public evidence', high: 'top 15%', medium: 'top 40%', watch: 'the rest',
 }
 
-// Evidence class per location: what stands behind the dot.
+// Evidence class per location: what stands behind the marker.
+// 'escalation' (the red "Repeat crashes" flag) was withdrawn on 16 Nov 2026: of 671
+// flags, none could be shown to be three crashes at one spot. It is only ever present
+// in the data when the site setting repeat_crash_flag is switched back on.
 export const EVIDENCE_LABEL = {
-  escalation: 'Repeat crashes',      // >= 3 casualty crashes on tight pins in 6 months
+  escalation: 'Repeat crashes',
   repeat: 'Repeated reports',        // >= 2 public reports at this location
   single: 'Single report',
 }
 export const EVIDENCE_HINT = {
   escalation: '3 or more crashes with casualties here in the last 6 months',
-  repeat: 'More than one independent report at this location',
+  repeat: 'More than one independent report names this place',
   single: 'One report — real evidence, not yet a pattern',
 }
 
-// Location precision (from the pipeline's breakdown): a named road or landmark
-// with repeat reports, or >= 3 distinct coordinates behind it.
-export const PRECISION_LABEL = { feature: 'Road-level', point: 'Point location' }
-export const PRECISION_HINT = {
-  feature: 'Reports name this road or landmark; the pin marks the feature, not a spot on it',
-  point: 'Three or more distinct coordinates stand behind this location',
+// How precisely a location is known (16 Nov 2026). A marker is accepted only when the
+// map provider's answer shares a name with the place in the article, and WHAT matched
+// is the precision. Most reports name a village or a town, not a point — so most
+// markers are areas, and the map draws them as rings, never as dots.
+export const PRECISION_LABEL = {
+  spot: 'Exact spot', road: 'Named road', locality: 'Village or locality', town: 'Town area',
+  unchecked: 'Location being re-checked',
 }
+export const PRECISION_HINT = {
+  spot: 'Coordinates in the report, or an address on the named road',
+  road: 'The road the reports name. The marker sits on that road, not at a particular point on it',
+  locality: 'The village or neighbourhood the reports name, a few kilometres across. The exact spot is not known',
+  town: 'The town the reports name, with its surrounding area. The marker stands for the town, not a spot in it',
+  unchecked: 'This marker predates the name check and has not been re-checked yet',
+}
+export const isArea = precision => precision === 'locality' || precision === 'town'
+export const PRECISION_ORDER = ['spot', 'road', 'locality', 'town', 'unchecked']
 
 export const ROAD_TYPE_LABEL = {
   NH: 'National highway', SH: 'State highway', MDR: 'Major district road', district: 'District road',
@@ -47,12 +60,15 @@ export const VERIFICATION_LABEL = {
   auto: 'Passed the confidence gate',
 }
 
-export function geocodeWords(method, conf) {
-  const m = (method || '').replace(/_/g, ' ')
-  const level = { 'landmark district': 'landmark level, district verified', 'road city': 'road level, city verified',
-                  'district centroid': 'district level', 'city centroid': 'city level', 'coords in text': 'exact coordinates',
-                  'manual': 'placed by a reviewer' }[m] || m || 'unknown'
-  return conf ? `${level} (${Math.round(conf * 100)}% confidence)` : level
+/** One report's location in words: what its marker was pinned to, or why it has none. */
+export function locationWords(i) {
+  if (i.precision === 'highway') {
+    return i.pinned_to ? `on ${i.pinned_to}; the point on the highway is not known` : 'on a numbered highway; the point is not known'
+  }
+  if (i.mapped === false) return 'the place named could not be found on the map'
+  const what = { spot: 'exact spot', road: 'named road', locality: 'village or locality', town: 'town area' }[i.precision]
+  if (!what) return 'marker not yet re-checked against the place named'
+  return i.pinned_to ? `${i.pinned_to} (${what})` : what
 }
 
 export const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`

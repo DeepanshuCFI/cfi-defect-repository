@@ -98,6 +98,11 @@
       "_cli_budget_note": "NOTIONAL runaway guard for LLM_BACKEND=cli, not a bill. ~$0.10/article on that backend (20k tokens of agent overhead per call), so 20.0 ~= 200 articles/day, matched to intake. The rate limit is the real backstop.",
       "llm_budget_usd_per_day_cli": 20.0
     },
+    "public_site": {
+      "_note": "What the public site shows beyond the data itself (scripts/export_public.py). coverage_only: only covered states appear on the site and in its headline numbers. repeat_crash_flag: the red 'Repeat crashes' flag, withdrawn 16 Nov 2026 after the location audit.",
+      "coverage_only": true,
+      "repeat_crash_flag": false
+    },
     "health": {
       "db_size_alert_mb": 2000,
       "defect_queue_max_age_days": 3,

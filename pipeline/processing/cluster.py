@@ -144,6 +144,15 @@ def run() -> dict:
               (cen, road, st, dist, city, n, fat, inj, d0, d1, dom))
             cur.execute("update incident set cluster_id=%s where id = any(%s)",
                         (cur.fetchone()[0], ids))
+        # A record that no longer clusters must not keep pointing at its old location.
+        # Until 16 Nov 2026 nothing cleared the link, which was harmless while pins were
+        # only ever added; once the name guard can REMOVE a pin, a stale cluster_id would
+        # keep listing the report under a place it was never at.
+        cur.execute("""update incident set cluster_id = null
+                       where cluster_id is not null
+                         and (geom is null or geocode_confidence is null
+                              or geocode_confidence < %s)""", (MIN_GEOCODE_CONF,))
+        unlinked = cur.rowcount
         conn.commit()
         return {"incidents": n_incidents, "hotspots": len(rows),
-                "kept": len(upd), "new": len(ins), "eps_m": eps}
+                "kept": len(upd), "new": len(ins), "eps_m": eps, "unlinked": unlinked}

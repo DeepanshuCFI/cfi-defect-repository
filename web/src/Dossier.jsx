@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Check, Copy, Flag, MapPin, TriangleAlert, X } from 'lucide-react'
+import { Check, Copy, Flag, MapPin, X } from 'lucide-react'
+import Report from './Report.jsx'
 import { EVIDENCE_HINT, EVIDENCE_LABEL, PRECISION_HINT, PRECISION_LABEL, TIER_COLOR, TIER_HINT, TIER_LABEL,
-         TIER_TEXT, VERIFICATION_LABEL, fmtDate, geocodeWords, plural } from './vocab.js'
+         TIER_TEXT, fmtDate, isArea, plural } from './vocab.js'
 
 // Members are fetched per location on open (data/incidents/<id>.json), not parsed
 // from a 10 MB file on page load. A small cache keeps a session's re-opens free.
@@ -45,6 +46,7 @@ export default function Dossier({ feature, meta, onClose, mobile }) {
     catch { window.prompt('Copy this link', link) }
   }
   const hidden = Number(p.records_hidden || 0)
+  const precision = PRECISION_LABEL[p.precision] ? p.precision : 'unchecked'
   const hiddenCrashes = Number(p.hidden_casualty_crashes_6mo || 0)
 
   return (
@@ -62,17 +64,25 @@ export default function Dossier({ feature, meta, onClose, mobile }) {
             {p.escalation
               ? <Chip bg="var(--color-danger)" fg="#fff" title={EVIDENCE_HINT.escalation}><Flag className="h-3 w-3" /> REPEAT CRASHES</Chip>
               : <Chip outline title={EVIDENCE_HINT[p.evidence]}>{(EVIDENCE_LABEL[p.evidence] || 'Single report').toUpperCase()}</Chip>}
-            <Chip outline title={PRECISION_HINT[p.location_precision || 'feature']}>
-              <MapPin className="h-3 w-3" /> {(PRECISION_LABEL[p.location_precision || 'feature']).toUpperCase()}
+            <Chip outline title={PRECISION_HINT[precision]}>
+              <MapPin className="h-3 w-3" /> {PRECISION_LABEL[precision].toUpperCase()}
             </Chip>
           </div>
-          <h2 className="font-heading font-bold text-[16px] leading-snug mt-2">{p.road_name || 'Unnamed stretch'}</h2>
+          <h2 className="font-heading font-bold text-[16px] leading-snug mt-2">
+            {isArea(precision) && p.place ? p.place : (p.road_name || p.place || 'Unnamed stretch')}
+          </h2>
           <div className="text-[12.5px] text-muted-foreground mt-0.5">{placeLine}</div>
         </div>
         <button onClick={onClose} aria-label="Close"
           className="no-print text-muted-foreground hover:text-foreground cursor-pointer p-2 -m-2 shrink-0">
           <X className="h-5 w-5" />
         </button>
+      </div>
+
+      {/* What the marker means, in a sentence. An area marker must never read as a spot. */}
+      <div className="px-5 py-3 border-b border-border bg-brand-soft text-[12px] text-muted-foreground leading-relaxed">
+        <b className="text-foreground font-medium">{PRECISION_LABEL[precision]}{p.place ? `: ${p.place}` : ''}.</b>{' '}
+        {PRECISION_HINT[precision]}.
       </div>
 
       {(p.defects || []).length > 0 && (
@@ -96,49 +106,14 @@ export default function Dossier({ feature, meta, onClose, mobile }) {
         {members && members.length === 0 && (
           <div className="text-[12.5px] text-muted-foreground py-6 text-center">No public reports at this location right now.</div>
         )}
-        {(members || []).map(i => {
-          const reportDate = i.date || i.sources?.[0]?.date
-          const cas = (i.fatalities || 0) > 0 || (i.injuries || 0) > 0
-          return (
-            <article key={i.id} className="rounded-xl border border-border p-3.5 mb-2.5">
-              <div className="flex justify-between gap-2 text-[12px] text-muted-foreground">
-                <span className="font-semibold text-foreground">{fmtDate(reportDate) || 'Date not stated'}</span>
-                {cas && <span className="text-danger font-semibold">{[i.fatalities ? plural(i.fatalities, 'death') : null,
-                  i.injuries ? plural(i.injuries, 'injured', 'injured') : null].filter(Boolean).join(' · ')}</span>}
-              </div>
-              <p className="text-[12.5px] mt-1.5 leading-relaxed">{i.summary}</p>
-              {(i.defects || []).map((d, ix) => (
-                <div key={ix} className="mt-2 text-[11.5px] bg-brand-lite rounded-lg px-3 py-2">
-                  <b className="text-brand">{d.label}</b>
-                  {d.evidence && <div className="text-muted-foreground mt-0.5">“{d.evidence}”</div>}
-                </div>
-              ))}
-              <div className="mt-2 text-[11.5px]">
-                {(i.sources || []).map((s, ix) => (
-                  <div key={ix}>
-                    <a href={s.url} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline break-words">
-                      {s.outlet || safeHost(s.url)}
-                    </a>
-                    {s.date && <span className="text-muted-foreground"> · {fmtDate(s.date)}</span>}
-                  </div>
-                ))}
-              </div>
-              <div className="mt-1.5 text-[10.5px] text-muted-foreground">
-                {i.verification === 'disputed'
-                  ? <span className="inline-flex items-center gap-1 text-warn font-semibold"><TriangleAlert className="h-3 w-3" /> {VERIFICATION_LABEL.disputed}</span>
-                  : <span className="inline-flex items-center gap-1"><Check className="h-3 w-3" /> {VERIFICATION_LABEL[i.verification] || VERIFICATION_LABEL.auto}</span>}
-                {' · '}Location: {geocodeWords(i.geocode_method, i.geocode_conf)}
-              </div>
-            </article>
-          )
-        })}
+        {(members || []).map(i => <Report key={i.id} i={i} />)}
       </div>
 
       {hidden > 0 && (
         <div className="mx-5 mb-3 rounded-xl bg-brand-soft border border-border px-4 py-3 text-[12px] text-muted-foreground">
           Also {plural(hidden, 'record')} at this location {hidden === 1 ? 'is' : 'are'} not shown publicly: crash reports that
           make no infrastructure claim{hiddenCrashes ? `, ${hiddenCrashes} of them with casualties in the last 6 months` : ''}.
-          They count toward the repeat-crashes flag, never toward the score.
+          They never count toward the score.
         </div>
       )}
 
@@ -206,8 +181,4 @@ function Chip({ children, bg, fg, outline, title }) {
 function sortByReportDate(members) {
   const key = i => i.date || i.sources?.[0]?.date || ''
   return [...members].sort((a, b) => key(b).localeCompare(key(a)))
-}
-
-function safeHost(url) {
-  try { return new URL(url).hostname } catch { return url }
 }

@@ -837,13 +837,21 @@ def cmd_geocode(args) -> None:
             print(f"geocoding {len(rows)} incident(s)…")
             for iid, loc, road, city, distr, state, used_fallback in rows:
                 g = geo(loc or "", road, city, distr, state)
+                if g["lat"] is None and g.get("geocode_precision"):
+                    # highway-only: the right road and no meaningful point on it. No
+                    # pin, but the class and the highway are worth keeping.
+                    cur.execute("""update incident set geocode_precision=%s,
+                                   geocode_match=%s where id=%s""",
+                                (g["geocode_precision"], g.get("geocode_match"), iid))
                 if g["lat"] is not None:
                     cur.execute(
                         """update incident set geom=ST_GeogFromText(%s),
                            geocode_confidence=%s, geocode_method=%s,
-                           geocode_qualifier=%s where id=%s""",
+                           geocode_qualifier=%s, geocode_precision=%s,
+                           geocode_match=%s where id=%s""",
                         (f"POINT({g['lon']} {g['lat']})", g["geocode_confidence"],
-                         g["geocode_method"], g.get("geocode_qualifier"), iid))
+                         g["geocode_method"], g.get("geocode_qualifier"),
+                         g.get("geocode_precision"), g.get("geocode_match"), iid))
                     if used_fallback:
                         # the hit passed _state_ok against this state, so labelling the
                         # record with it is consistent with where it was actually placed
@@ -878,9 +886,11 @@ def cmd_geocode(args) -> None:
                     cur.execute(
                         """update incident set geom=ST_GeogFromText(%s),
                            geocode_confidence=%s, geocode_method=%s,
-                           geocode_qualifier=%s where id=%s""",
+                           geocode_qualifier=%s, geocode_precision=%s,
+                           geocode_match=%s where id=%s""",
                         (f"POINT({g['lon']} {g['lat']})", g["geocode_confidence"],
-                         g["geocode_method"], g.get("geocode_qualifier"), iid))
+                         g["geocode_method"], g.get("geocode_qualifier"),
+                         g.get("geocode_precision"), g.get("geocode_match"), iid))
                     if g["geocode_confidence"] >= 0.6 and status in ("needs_human", "archived"):
                         cur.execute("update incident set verification_status='auto' "
                                     "where id=%s", (iid,))

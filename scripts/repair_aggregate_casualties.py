@@ -8,7 +8,13 @@ Audit-logs every change to review_action, so each row can be restored.
 
 Dry run by default: lists every row it would change and the public before/after totals.
 
+--ids names rows that were READ BY HAND and found to be period totals although the
+pattern cannot catch them safely: below 10 casualties the roundup wording appears in
+real single-crash reports far more often than in totals (16 Nov 2026: of 27 public rows
+with the wording, 4 were multi-year or multi-month totals and 23 were real crashes).
+
 Usage: python -m scripts.repair_aggregate_casualties [--apply] [--skip 123,11693]
+                                                     [--ids 13207,14000,43412,51403]
 """
 import json
 import sys
@@ -20,15 +26,28 @@ from pipeline.db import connect                                 # noqa: E402
 from pipeline.store import looks_like_aggregate_casualties     # noqa: E402
 
 
-def _skip_ids(argv: list[str]) -> set[int]:
-    if "--skip" not in argv:
+def _id_list(argv: list[str], flag: str) -> set[int]:
+    if flag not in argv:
         return set()
-    return {int(x) for x in argv[argv.index("--skip") + 1].split(",") if x.strip()}
+    return {int(x) for x in argv[argv.index(flag) + 1].split(",") if x.strip()}
+
+
+def _skip_ids(argv: list[str]) -> set[int]:
+    return _id_list(argv, "--skip")
+
+
+def select_hits(rows, skip: set[int], by_hand: set[int]) -> list:
+    """Rows to zero: every pattern match not skipped, plus the hand-read ids (pure).
+    A hand-read id is taken on the reader's word — that is the point of it — but
+    --skip still wins, so one list can never silently override the other."""
+    return [r for r in rows if r[0] not in skip
+            and (r[0] in by_hand or looks_like_aggregate_casualties(r[3], r[1], r[2]))]
 
 
 def main() -> None:
     apply = "--apply" in sys.argv
     skip = _skip_ids(sys.argv)
+    by_hand = _id_list(sys.argv, "--ids")
     with connect() as conn, conn.cursor() as cur:
         cur.execute("""
           select i.id, i.fatalities, i.injuries, i.narrative_summary,
@@ -37,14 +56,14 @@ def main() -> None:
           where i.fatalities + i.injuries > 0
           order by i.fatalities desc, i.id""")
         rows = cur.fetchall()
-        hits = [r for r in rows
-                if r[0] not in skip and looks_like_aggregate_casualties(r[3], r[1], r[2])]
+        hits = select_hits(rows, skip, by_hand)
         cur.execute("select coalesce(sum(fatalities),0), coalesce(sum(injuries),0), "
                     "count(*) filter (where fatalities + injuries > 0) from public_incident")
         pub_f, pub_i, pub_cas = cur.fetchone()
         pub_hits = [r for r in hits if r[4]]
         print(f"{len(hits)} incident(s) read as roundups ({len(pub_hits)} public); "
-              f"skipped by hand: {sorted(skip) or 'none'}")
+              f"skipped by hand: {sorted(skip) or 'none'}; "
+              f"added by hand: {sorted(by_hand) or 'none'}")
         for iid, f, i, summary, is_public in hits:
             print(f"  {'PUBLIC ' if is_public else '       '}#{iid}: F{f} I{i}  {summary[:110]}")
         print(f"public deaths {pub_f} -> {pub_f - sum(r[1] for r in pub_hits)}, "

@@ -16,8 +16,9 @@ TIERS = {"critical": 75, "high": 50, "medium": 25, "watch": 0}
 class _Cur:
     """Fake cursor: answers each of the exporter's queries from canned rows and
     counts how many statements it was asked to run."""
-    def __init__(self, n_incidents: int):
+    def __init__(self, n_incidents: int, site=None, incidents=None):
         self.n, self.calls, self._last = n_incidents, [], ""
+        self.site, self.incidents = site, incidents
 
     def __enter__(self): return self
 
@@ -35,6 +36,8 @@ class _Cur:
             return ({"daily_states": ["Bihar", "Uttar Pradesh", "Rajasthan"]},)
         if "config_district" in self._last:
             return (146,)
+        if "key='public_site'" in self._last:
+            return (self.site,) if self.site is not None else None
         return (TIERS,)
 
     def fetchall(self):
@@ -60,10 +63,18 @@ class _Cur:
                 return [("https://x/1", "Outlet", date(2026, 10, 1))]
             return [(i, "https://x/1", "Outlet", date(2026, 10, 1)) for i in range(self.n)]
         if "from public_incident i" in q:
-            return [(i, 1, date(2026, 10, 2), "loc", "NH-1", "nh", "Bihar", "Patna", 1, 2,
-                     ["pedestrian"], "summary", "auto_published", 0.9, 0.8, "road_city")
-                    for i in range(self.n)]
+            if self.incidents is not None:
+                return self.incidents
+            return [_inc(i) for i in range(self.n)]
         raise AssertionError(f"unexpected query: {q[:80]}")
+
+
+def _inc(i, hotspot=1, state="Bihar", district="Patna", deaths=1, precision="road",
+         pinned_to="Sandi Hardoi Rd", pinned=True):
+    """One public_incident row in the exporter's column order."""
+    return (i, hotspot, date(2026, 10, 2), "loc", "NH-1", "nh", state, district, deaths, 2,
+            ["pedestrian"], "summary", "auto_published", 0.9, 0.8, "road_city",
+            precision, pinned_to, pinned)
 
 
 class _Conn:
@@ -73,8 +84,8 @@ class _Conn:
     def __exit__(self, *a): return False
 
 
-def _run(monkeypatch, tmp_path, n):
-    cur = _Cur(n)
+def _run(monkeypatch, tmp_path, n, **kw):
+    cur = _Cur(n, **kw)
     monkeypatch.setattr(ex, "OUT", tmp_path)
     monkeypatch.setattr(ex, "connect", lambda: _Conn(cur))
     ex.main()
@@ -84,7 +95,7 @@ def _run(monkeypatch, tmp_path, n):
 def test_export_query_count_does_not_grow_with_the_incident_table(monkeypatch, tmp_path):
     small, _ = _run(monkeypatch, tmp_path, 3)
     big, data = _run(monkeypatch, tmp_path, 300)
-    assert len(big.calls) == len(small.calls) <= 8, (len(small.calls), len(big.calls))
+    assert len(big.calls) == len(small.calls) <= 9, (len(small.calls), len(big.calls))
     assert len(data) == 300
     assert data[7]["defects"] == [{"type": "potholes_or_broken_surface",
                                    "label": "Potholes / broken surface",
@@ -111,11 +122,86 @@ def test_attach_children_groups_by_incident_and_keeps_source_order():
     assert out[2]["defects"] == [] and out[2]["sources"] == []
 
 
-def test_hotspot_export_carries_the_location_precision_label(monkeypatch, tmp_path):
-    _run(monkeypatch, tmp_path, 1)
+def test_hotspot_export_carries_precision_and_the_name_it_is_pinned_to(monkeypatch, tmp_path):
+    _run(monkeypatch, tmp_path, 3)                       # 3 road-level reports in hotspot 1
     feats = json.loads((tmp_path / "hotspots.geojson").read_text())["features"]
-    assert [f["properties"]["location_precision"] for f in feats] == ["feature", "point"]
+    p1, p2 = feats[0]["properties"], feats[1]["properties"]
+    assert (p1["precision"], p1["place"]) == ("road", "Sandi Hardoi Rd")
+    assert (p2["precision"], p2["place"]) == ("unchecked", None)     # no members assessed
+    assert "location_precision" not in p1, "the old point/feature label is retired"
+
+
+def test_a_location_is_as_precise_as_its_least_precise_report():
+    m = lambda c, name=None: {"precision": c, "pinned_to": name}        # noqa: E731
+    assert ex.hotspot_precision([m("road"), m("town"), m("spot")]) == "town"
+    assert ex.hotspot_precision([m("spot"), m("road")]) == "road"
+    assert ex.hotspot_precision([m(None), m("locality")]) == "locality"
+    assert ex.hotspot_precision([m(None)]) == ex.hotspot_precision([]) == "unchecked"
+    assert ex.hotspot_place([m("town", "Bilgram"), m("town", "Bilgram"), m("road", "Sandi Rd")]) == "Bilgram"
+    assert ex.hotspot_place([m("town")]) is None
+
+
+def test_the_repeat_crash_flag_is_withdrawn_unless_the_site_setting_turns_it_on(monkeypatch, tmp_path):
+    """16 Nov 2026: of 671 public flags, none could be shown to be three crashes at one
+    spot. Both fake hotspots are escalation candidates in the database."""
+    _run(monkeypatch, tmp_path, 3)
+    feats = json.loads((tmp_path / "hotspots.geojson").read_text())["features"]
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert not any(f["properties"]["escalation"] for f in feats)
+    assert {f["properties"]["evidence"] for f in feats} == {"repeat"}
+    assert meta["by_evidence"]["escalation"] == 0 and meta["site"]["repeat_crash_flag"] is False
+    _run(monkeypatch, tmp_path, 3, site={"repeat_crash_flag": True})
+    feats = json.loads((tmp_path / "hotspots.geojson").read_text())["features"]
     assert all(f["properties"]["escalation"] for f in feats)
+    assert ex.evidence_class(5, True) == "repeat" and ex.evidence_class(5, True, True) == "escalation"
+
+
+def test_site_settings_ignore_junk_and_default_safely():
+    assert ex.public_site_settings(None) == ex.PUBLIC_SITE_DEFAULTS
+    assert ex.public_site_settings({"coverage_only": False, "_note": "x", "other": 1}) == \
+        {"coverage_only": False, "repeat_crash_flag": False}
+    assert ex.public_site_settings("garbage") == ex.PUBLIC_SITE_DEFAULTS
+
+
+def test_reports_outside_the_covered_states_stay_off_the_site_and_out_of_the_headline(monkeypatch, tmp_path):
+    """297 reports from uncovered states were 4% of reports and 181 of 613 headline
+    deaths (16 Nov 2026). The collector does not cover them; the headline must not."""
+    rows = [_inc(1, deaths=1), _inc(2, deaths=2),
+            _inc(3, state="Maharashtra", district="Pune", deaths=40, hotspot=None)]
+    _, data = _run(monkeypatch, tmp_path, 0, incidents=rows)
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert [i["id"] for i in data] == [1, 2]
+    assert meta["incidents"] == 2 and meta["fatalities"] == 3
+    assert meta["outside_coverage"] == {"reports": 1, "deaths": 40}
+    # and it is a setting, not a deletion
+    _, data = _run(monkeypatch, tmp_path, 0, incidents=rows, site={"coverage_only": False})
+    assert len(data) == 3
+    assert ex.in_coverage("Kerala", [], True), "no coverage list must not blank the site"
+
+
+def test_a_report_without_a_pin_is_listed_by_district_never_under_a_location(monkeypatch, tmp_path):
+    rows = [_inc(1),                                                        # on the map
+            _inc(2, precision=None, pinned_to=None, pinned=False),          # stale link, no pin
+            _inc(3, hotspot=None, precision="highway", pinned_to="NH 31", pinned=False),
+            _inc(4, hotspot=None, district="Gaya", precision=None, pinned_to=None, pinned=False),
+            _inc(5, hotspot=999)]                                           # location not exported
+    _, data = _run(monkeypatch, tmp_path, 0, incidents=rows)
+    by_id = {i["id"]: i for i in data}
+    assert [i for i in by_id if by_id[i]["mapped"]] == [1]
+    assert by_id[2]["hotspot_id"] is None, "a report with no pin must not sit under its old location"
+    assert by_id[3]["unmapped_reason"] == "highway" and by_id[4]["unmapped_reason"] == "unplaced"
+    assert [m["id"] for m in json.loads((tmp_path / "incidents" / "1.json").read_text())] == [1]
+    index = json.loads((tmp_path / "unmapped" / "index.json").read_text())
+    assert [(g["state"], g["district"], g["count"], g["highway"]) for g in index] == \
+        [("Bihar", "Gaya", 1, 0), ("Bihar", "Patna", 3, 1)]
+    listed = [i["id"] for g in index for i in json.loads((tmp_path / "unmapped" / g["file"]).read_text())]
+    assert sorted(listed) == [2, 3, 4, 5]
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert (meta["incidents"], meta["mapped"], meta["unmapped"], meta["unmapped_highway"]) == (5, 1, 4, 1)
+    # stale district files from an earlier export are removed
+    (tmp_path / "unmapped" / "77.json").write_text("[]")
+    _run(monkeypatch, tmp_path, 0, incidents=rows)
+    assert not (tmp_path / "unmapped" / "77.json").exists()
 
 
 def test_hotspot_export_tiers_by_quantile_and_states_what_is_hidden(monkeypatch, tmp_path):
