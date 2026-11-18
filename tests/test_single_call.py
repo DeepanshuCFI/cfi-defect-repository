@@ -276,3 +276,46 @@ def test_a_usage_limit_stops_the_stage_and_leaves_the_queue_alone(monkeypatch, t
     assert stats["stopped_reason"] == "api_monthly_limit" and stats["api_limit_hit"] is True
     assert set(status.values()) == {"fetched"}, "a refused call is not a failed article"
     assert incidents == [] and stats["failed"] == 0
+
+
+# ------------------------------------------------ the side-by-side check's own scoring
+def _pair(aid, old, new):
+    return {"article_id": aid, "text": "t", "old": old, "new": new}
+
+
+def test_side_by_side_scoring_counts_each_kind_of_disagreement():
+    from scripts import compare_single_call as c
+    inc = {"in_scope": True, "infra_implicated": True, "fatalities": 1, "injuries": 0,
+           "admin_district": "Gaya", "defects": ["potholes_or_broken_surface"]}
+    out = {"in_scope": False}
+    rows = [
+        _pair(1, out, {"in_scope": False, "kind": "out_of_scope", "reason": ""}),
+        _pair(2, inc, {**inc, "admin_district": "gaya"}),                    # same record
+        _pair(3, inc, {**inc, "injuries": 2}),                               # casualties differ
+        _pair(4, inc, {**inc, "defects": ["no_street_lighting"]}),           # no shared defect
+        _pair(5, inc, {**inc, "infra_implicated": False, "defects": []}),    # infra differs
+        _pair(6, out, {**inc}),                                              # scope differs
+        _pair(7, inc, {"error": "BackendError: timed out"}),                 # a failed call
+    ]
+    s = c.compare(rows)
+    assert s["n"] == 7 and s["errors"] == 1 and s["n_scope"] == 6
+    assert s["scope_agreement"] == round(5 / 6, 3) and s["old_out_new_in"] == 1
+    assert s["n_both_in_scope"] == 4
+    assert s["infra_agreement"] == 0.75 and s["casualty_agreement"] == 0.75
+    assert s["district_agreement"] == 1.0, "district names compare without case or spacing"
+    assert s["n_both_infra"] == 3 and s["defect_overlap"] == round(2 / 3, 3)
+    assert {d["article_id"]: d["why"] for d in s["disagreements"]} == {
+        3: ["casualties"], 4: ["defects"], 5: ["infra"], 6: ["scope"]}
+
+
+def test_side_by_side_verdict_fails_on_any_missed_bar_or_on_failed_calls():
+    from scripts import compare_single_call as c
+    th = {"scope_agreement": 0.9, "infra_agreement": 0.9}
+    good = {"scope_agreement": 0.96, "infra_agreement": 0.94, "errors": 0}
+    assert c.verdict(good, th) == (True, [])
+    ok, fails = c.verdict({**good, "infra_agreement": 0.8}, th)
+    assert not ok and "infra_agreement" in fails[0]
+    ok, fails = c.verdict({**good, "scope_agreement": None}, th)
+    assert not ok, "a rate that could not be computed is not a pass"
+    ok, fails = c.verdict({**good, "errors": 2}, th)
+    assert not ok and "failed" in fails[0]
