@@ -677,9 +677,16 @@ def cmd_process(args) -> dict:
         # hundred junk articles must not make a day of refused model calls look busy.
         stats = {"prefiltered": 0, "irrelevant": 0, "extracted": 0, "extracted_light": 0,
                  "skipped_pure_crash": 0, "failed": 0, "snippets_dropped": 0,
-                 "prefilter_swept": sweep["swept"], "prefilter_scanned": sweep["scanned"]}
+                 "prefilter_swept": sweep["swept"], "prefilter_scanned": sweep["scanned"],
+                 "model_calls": 0}
         stopped_reason = None                 # why the loop broke early, if it did
-        from pipeline import llmcost
+        from pipeline import llm, llmcost
+        # One call per article on the subscription backend: every call there carries
+        # the same fixed overhead, so a separate screening call halved what a day's
+        # allowance could read. The API backend keeps the cheap screen + tiered models.
+        single = ex.single_call_enabled(proc_cfg, llm.backend())
+        stats["single_call"] = single
+        print(f"  reading mode: {'one call per article' if single else 'relevance call, then extraction call'}")
         # Extraction may spend only its SHARE of the daily budget; the rest is reserved
         # for adjudication (which gates publication) — without a reserve, extraction ate
         # 100% and nothing published (11-14 Jul map freeze). The reserve is now SIZED TO
@@ -731,48 +738,77 @@ def cmd_process(args) -> dict:
                 stats["prefiltered"] += 1
                 continue                      # zero tokens spent
             title = text.split("\n", 1)[0][:140]
-            try:
-                cls = rel.classify(title, text)
-            except Exception as e:
-                _raise_if_credential_error(e)
-                if _api_limit_hit(e):
-                    print(f"  USAGE LIMIT or network block — stopping; queue waits for the "
-                          f"next run ({str(e)[:120]})")
-                    stats["api_limit_hit"] = True
-                    stopped_reason = "api_monthly_limit"
-                    break
-                print(f"  WARN relevance failed #{a['id']}: {e}")
-                stats["failed"] += 1
-                continue
-            if not cls.get("in_scope"):
-                store.set_article_status(a["id"], "irrelevant")
-                stats["irrelevant"] += 1
-                print(f"  - irrelevant #{a['id']} ({cls.get('kind')}): {cls.get('reason','')[:60]}")
-                continue
-            pure_crash = cls.get("kind") == "crash"
-            if pure_crash and proc_cfg.get("skip_pure_crashes", False):
-                # defect-focus max-savings mode: don't extract behaviour-only crashes.
-                # NOTE: weakens the >=3-in-6mo escalation counter — off by default.
-                store.set_article_status(a["id"], "irrelevant")
-                stats["skipped_pure_crash"] += 1
-                continue
-            light = pure_crash and proc_cfg.get("tiered_extraction", True)
-            try:
-                inc, dropped = ex.extract(title, text,
-                                          published_at=str(a.get("published_at") or "") or None,
-                                          light=light)
-            except Exception as e:
-                _raise_if_credential_error(e)
-                if _api_limit_hit(e):
-                    print(f"  USAGE LIMIT or network block — stopping; queue waits for the "
-                          f"next run ({str(e)[:120]})")
-                    stats["api_limit_hit"] = True
-                    stopped_reason = "api_monthly_limit"
-                    break
-                print(f"  WARN extraction failed #{a['id']}: {e}")
-                store.set_article_status(a["id"], "failed")
-                stats["failed"] += 1
-                continue
+            pub = str(a.get("published_at") or "") or None
+            skip_pure = proc_cfg.get("skip_pure_crashes", False)
+            if single:
+                stats["model_calls"] += 1
+                try:
+                    cls, inc, dropped = ex.read_article(title, text, published_at=pub)
+                except Exception as e:
+                    _raise_if_credential_error(e)
+                    if _api_limit_hit(e):
+                        print(f"  USAGE LIMIT or network block — stopping; queue waits for the "
+                              f"next run ({str(e)[:120]})")
+                        stats["api_limit_hit"] = True
+                        stopped_reason = "api_monthly_limit"
+                        break
+                    print(f"  WARN read failed #{a['id']}: {e}")
+                    store.set_article_status(a["id"], "failed")
+                    stats["failed"] += 1
+                    continue
+                if not cls["in_scope"]:
+                    store.set_article_status(a["id"], "irrelevant")
+                    stats["irrelevant"] += 1
+                    print(f"  - irrelevant #{a['id']} ({cls['kind']}): {cls['reason'][:60]}")
+                    continue
+                if cls["kind"] == "crash" and skip_pure:
+                    store.set_article_status(a["id"], "irrelevant")
+                    stats["skipped_pure_crash"] += 1
+                    continue
+                light = False
+            else:
+                stats["model_calls"] += 1
+                try:
+                    cls = rel.classify(title, text)
+                except Exception as e:
+                    _raise_if_credential_error(e)
+                    if _api_limit_hit(e):
+                        print(f"  USAGE LIMIT or network block — stopping; queue waits for the "
+                              f"next run ({str(e)[:120]})")
+                        stats["api_limit_hit"] = True
+                        stopped_reason = "api_monthly_limit"
+                        break
+                    print(f"  WARN relevance failed #{a['id']}: {e}")
+                    stats["failed"] += 1
+                    continue
+                if not cls.get("in_scope"):
+                    store.set_article_status(a["id"], "irrelevant")
+                    stats["irrelevant"] += 1
+                    print(f"  - irrelevant #{a['id']} ({cls.get('kind')}): {cls.get('reason','')[:60]}")
+                    continue
+                pure_crash = cls.get("kind") == "crash"
+                if pure_crash and skip_pure:
+                    # defect-focus max-savings mode: don't extract behaviour-only crashes.
+                    # NOTE: weakens the >=3-in-6mo escalation counter — off by default.
+                    store.set_article_status(a["id"], "irrelevant")
+                    stats["skipped_pure_crash"] += 1
+                    continue
+                light = pure_crash and proc_cfg.get("tiered_extraction", True)
+                stats["model_calls"] += 1
+                try:
+                    inc, dropped = ex.extract(title, text, published_at=pub, light=light)
+                except Exception as e:
+                    _raise_if_credential_error(e)
+                    if _api_limit_hit(e):
+                        print(f"  USAGE LIMIT or network block — stopping; queue waits for the "
+                              f"next run ({str(e)[:120]})")
+                        stats["api_limit_hit"] = True
+                        stopped_reason = "api_monthly_limit"
+                        break
+                    print(f"  WARN extraction failed #{a['id']}: {e}")
+                    store.set_article_status(a["id"], "failed")
+                    stats["failed"] += 1
+                    continue
             stats["snippets_dropped"] += len(dropped)
             if dropped:
                 print(f"    ! dropped non-verbatim snippets: {dropped}")

@@ -28,8 +28,9 @@ TOOL = {
     },
 }
 
-SYSTEM = (
-    "You screen Indian news articles for a road-safety evidence registry. "
+# The scope rule, stated once. The single-call reader (extract.read_article) quotes this
+# same text, so the two paths cannot drift into judging scope differently.
+SCOPE_RULES = (
     "In scope: a specific road crash in India, or a specific road-infrastructure "
     "defect/hazard in India. Out of scope: crashes outside India, crime/violence, "
     "suicides, rail/air/boat accidents (unless at a road level crossing), pure "
@@ -38,6 +39,12 @@ SYSTEM = (
     "building/roof/ceiling/wall collapses, hospital/school/office premises hazards, "
     "elevators, wells, electrocutions — UNLESS the road itself is the hazard "
     "(road cave-in, open drain on a road, waterlogged carriageway). "
+)
+KINDS = ("crash", "infra_defect", "both", "out_of_scope")
+
+SYSTEM = (
+    "You screen Indian news articles for a road-safety evidence registry. "
+    + SCOPE_RULES +
     "Judge only from the text given."
 )
 
