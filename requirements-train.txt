@@ -1,0 +1,4 @@
+# Only for scripts/train_queue_weights.py (monthly, run by hand). The daily pipeline
+# and the test suite do not need these.
+scikit-learn>=1.8
+scipy>=1.11

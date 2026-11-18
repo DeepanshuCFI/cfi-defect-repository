@@ -143,18 +143,31 @@ class DBStore:
         self.conn = connect()
 
     def articles_by_status(self, status: str, limit: int = 100,
-                           priority_terms: list[str] | None = None) -> list[dict]:
+                           priority_terms: list[str] | None = None,
+                           weights: dict | None = None) -> list[dict]:
         """priority_terms: articles containing any of these sort FIRST, across the WHOLE
         queue. Without it the caller gets the oldest `limit` rows by id and can only
         re-order within that window — which silently starves the queue once the backlog
         outgrows it (measured 31 Jul 2026: the oldest-1000 window held 21 of the 601
         defect-vocabulary articles; the other 580 were never loaded, so the budget was
-        spent on the behaviour-crash tail while real defect reports aged out of reach)."""
+        spent on the behaviour-crash tail while real defect reports aged out of reach).
+
+        weights (a queue_score table) takes precedence: highest score first, oldest
+        first among equals, again ranked across the whole queue in the database. Each
+        row then carries its `queue_score`."""
         cols_sql = """select id, url, outlet_name, language, state, district, clean_text,
                              published_at
                       from source_article where processing_status = %s"""
         with self.conn.cursor() as cur:
-            if priority_terms:
+            if weights:
+                from pipeline.processing.queue_score import SCORE_SQL
+                cur.execute(f"""select q.* from (
+                           select id, url, outlet_name, language, state, district,
+                                  clean_text, published_at, {SCORE_SQL} as queue_score
+                           from source_article where processing_status = %s) q
+                       order by q.queue_score desc, q.id limit %s""",
+                            (weights["terms"], weights["weights"], status, limit))
+            elif priority_terms:
                 # strpos, not LIKE: terms are 13-language and would need % / _ escaping.
                 # Case-sensitive, matching the caller's own substring test.
                 cur.execute(cols_sql + """
@@ -163,6 +176,20 @@ class DBStore:
                        limit %s""", (status, list(priority_terms), limit))
             else:
                 cur.execute(cols_sql + " order by id limit %s", (status, limit))
+            cols = [d.name for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    def articles_random(self, status: str, limit: int, seed: int | None = None) -> list[dict]:
+        """`limit` articles drawn uniformly from the whole queue — the unbiased slice
+        the reading queue's weight table is trained and judged on (queue_score). `seed`
+        is for the file-backed store's tests; Postgres draws its own."""
+        if limit <= 0:
+            return []
+        with self.conn.cursor() as cur:
+            cur.execute("""select id, url, outlet_name, language, state, district,
+                                  clean_text, published_at
+                           from source_article where processing_status = %s
+                           order by random() limit %s""", (status, limit))
             cols = [d.name for d in cur.description]
             return [dict(zip(cols, r)) for r in cur.fetchall()]
 
@@ -447,17 +474,29 @@ class JsonlStore:
             self._rows = [json.loads(l) for l in self.path.read_text().splitlines() if l]
         self._urls = {r["url"] for r in self._rows}
 
+    def articles_random(self, status: str, limit: int, seed: int | None = None) -> list[dict]:
+        import random
+        pool = [dict(r) for r in self._rows if r.get("processing_status") == status]
+        return random.Random(seed).sample(pool, min(max(0, limit), len(pool)))
+
     def articles_by_status(self, status: str, limit: int = 100,
-                           priority_terms: list[str] | None = None) -> list[dict]:
+                           priority_terms: list[str] | None = None,
+                           weights: dict | None = None) -> list[dict]:
         out = []
         for r in self._rows:
             if r.get("processing_status") == status:
                 rec = dict(r)
                 rec.setdefault("clean_text", rec.get("clean_text"))
                 out.append(rec)
-            if not priority_terms and len(out) >= limit:
+            if not priority_terms and not weights and len(out) >= limit:
                 break                      # unprioritised: first `limit` matches is fine
-        if priority_terms:
+        if weights:
+            # same rule as the SQL path: score desc, then oldest first, whole queue
+            from pipeline.processing.queue_score import score
+            for a in out:
+                a["queue_score"] = score(a.get("clean_text"), weights)
+            out.sort(key=lambda a: (-a["queue_score"], a["id"]))
+        elif priority_terms:
             # same rule as the SQL path: whole queue ranked before the window is cut
             out.sort(key=lambda a: 0 if any(
                 t in (a.get("clean_text") or "") for t in priority_terms) else 1)

@@ -166,7 +166,7 @@ def test_14_nov_the_lag_alerts_and_the_yield_does_not(monkeypatch):
     checks, cur = _checks(monkeypatch, answers, current)
     assert set(checks) == {"db_size", "extraction_lag", "new_stuck", "stranded_new",
                            "publishing_alive", "extraction_alive", "yield_7d",
-                           "defect_vocab_share_7d"}
+                           "defect_vocab_share_7d", "queue_weights_age"}
     assert "queue_depth" not in checks
     ok, detail = checks["extraction_lag"]
     assert not ok and "10.0 days" in detail and "1394" in detail and "13134" in detail
