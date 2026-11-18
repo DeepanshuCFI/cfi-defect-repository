@@ -2,8 +2,8 @@
 
 The daily allowance reads a few hundred articles; about 840 arrive. Which ones get
 read is therefore the largest lever on what the registry learns. Until Nov 2026 the
-order was a two-class rule — any defect-vocabulary term first, then by age — and two
-articles in three it put at the head of the line turned out not to report a road
+order was a two-class rule — any defect-vocabulary term first, then by age — and one
+article in three it put at the head of the line turned out not to report a road
 defect.
 
 This module replaces the rule with a weight table: a short list of terms, each with a
