@@ -8,6 +8,13 @@ Honesty enforcement beyond the prompt:
 
 Note (stated deviation, Phase 0): translation is folded into this call — English fields
 out, original-language evidence snippets kept. No separate translate pass.
+
+ONE CALL PER ARTICLE (read_article, Nov 2026): the relevance verdict is folded into
+this call too. On the subscription backend every call carries the same fixed overhead
+whatever it asks, so a cheap screening call ahead of extraction saved nothing and
+halved what a day's allowance could read. The two-call path (relevance.classify, then
+extract) stays for the API backend, where a small model screens at a fraction of the
+extraction price.
 """
 import json
 import re
@@ -132,6 +139,15 @@ def validate_snippets(result: dict, article_text: str) -> tuple[dict, list[str]]
     return result, dropped
 
 
+def _content(title: str | None, text: str, published_at: str | None) -> str:
+    pub = f"ARTICLE PUBLISHED: {published_at}\n" if published_at else ""
+    return (f"{pub}TITLE: {title or '(none)'}\n\nARTICLE:\n{text[:7000]}\n\n"
+            "Resolve relative dates (e.g. 'on Friday', 'yesterday', weekday names "
+            "with no year) against the published date above. If the article "
+            "clearly reports an OLD crash (an anniversary/retrospective), keep the "
+            "old date. If no date is derivable, use null.")
+
+
 def extract(title: str | None, text: str,
             published_at: str | None = None,
             light: bool = False) -> tuple[dict, list[str]]:
@@ -139,12 +155,109 @@ def extract(title: str | None, text: str,
     location crash-frequency counts; infra-implicated coverage gets the strong model."""
     from pipeline import llm
     model = llm.model_for("extraction_light" if light else "extraction")
-    pub = f"ARTICLE PUBLISHED: {published_at}\n" if published_at else ""
-    content = (f"{pub}TITLE: {title or '(none)'}\n\nARTICLE:\n{text[:7000]}\n\n"
-               "Resolve relative dates (e.g. 'on Friday', 'yesterday', weekday names "
-               "with no year) against the published date above. If the article "
-               "clearly reports an OLD crash (an anniversary/retrospective), keep the "
-               "old date. If no date is derivable, use null.")
-    from pipeline import llm
-    result = llm.structured(SYSTEM, build_tool(), content, model=model, max_tokens=2000)
+    result = llm.structured(SYSTEM, build_tool(), _content(title, text, published_at),
+                            model=model, max_tokens=2000)
     return validate_snippets(result, text)
+
+
+# ------------------------------------------------------------- one call per article
+SCOPE_FIELDS = ("in_scope", "kind", "scope_reason")
+IN_SCOPE_KINDS = ("crash", "infra_defect", "both")
+
+
+def build_single_tool() -> dict:
+    """The extraction schema with the scope verdict in front.
+
+    Only the verdict is `required`: an out-of-scope article has no incident to
+    describe, and forcing the model to fill one in would invent a record. What an
+    in-scope answer must carry is checked in split_scope instead."""
+    from pipeline.processing import relevance as rel
+    tool = build_tool()
+    schema = tool["input_schema"]
+    scope = {
+        "in_scope": {"type": "boolean",
+                     "description": rel.TOOL["input_schema"]["properties"]["in_scope"]["description"]},
+        "kind": {"type": "string", "enum": list(rel.KINDS),
+                 "description": ("crash = a crash with no road defect reported; infra_defect = "
+                                 "a road defect/hazard with no crash; both = a crash the article "
+                                 "ties to a road defect; out_of_scope otherwise.")},
+        "scope_reason": {"type": "string", "description": "≤15 words"},
+    }
+    return {
+        "name": "record_article",
+        "description": ("Record whether the article is in scope and, only if it is, the "
+                        "structured road-crash/defect incident it reports."),
+        "input_schema": {
+            "type": "object",
+            "properties": {**scope, **schema["properties"]},
+            "required": list(SCOPE_FIELDS),
+        },
+    }
+
+
+def single_system() -> str:
+    from pipeline.processing import relevance as rel
+    return (
+        SYSTEM + "\n\n"
+        "FIRST decide whether the article is in scope. " + rel.SCOPE_RULES +
+        "Judge only from the text given.\n"
+        "If it is OUT of scope: return in_scope=false, kind='out_of_scope' and "
+        "scope_reason, and NOTHING else — do not describe an incident.\n"
+        "If it is IN scope: return in_scope=true, kind, scope_reason and the full "
+        "incident record under the rules above."
+    )
+
+
+def split_scope(result: dict) -> tuple[dict, dict | None]:
+    """Separate the scope verdict from the incident. Pure.
+
+    Returns ({in_scope, kind, reason}, incident-or-None). An article is in scope only
+    when the model says so on BOTH fields: in_scope=true with kind='out_of_scope' is a
+    contradiction, and a contradicted record is not one to put in an evidence registry.
+    A missing or unknown kind is not a contradiction — the incident's own
+    infra_implicated decides it. An in-scope answer missing the fields an incident is
+    made of raises ValueError: the caller treats that as a failed read, never as a
+    record with invented blanks."""
+    result = dict(result or {})
+    said_in = result.pop("in_scope", None) is True
+    kind = result.pop("kind", None)
+    reason = str(result.pop("scope_reason", "") or "")
+    if not said_in or kind == "out_of_scope":
+        return {"in_scope": False, "kind": "out_of_scope", "reason": reason}, None
+    missing = [f for f in build_tool()["input_schema"]["required"] if f not in result]
+    if missing:
+        raise ValueError(f"in scope but the incident is missing {missing}")
+    if kind not in IN_SCOPE_KINDS:
+        kind = "both" if result.get("infra_implicated") is True else "crash"
+    return {"in_scope": True, "kind": kind, "reason": reason}, result
+
+
+def read_article(title: str | None, text: str,
+                 published_at: str | None = None) -> tuple[dict, dict | None, list[str]]:
+    """Scope verdict and extraction in ONE model call.
+
+    Returns (scope, incident, dropped_snippets); incident is None when out of scope.
+    Always the full extraction model: with a single call there is no earlier verdict
+    to tier on."""
+    from pipeline import llm
+    result = llm.structured(single_system(), build_single_tool(),
+                            _content(title, text, published_at),
+                            model=llm.model_for("extraction"), max_tokens=2000)
+    try:
+        scope, inc = split_scope(result)
+    except ValueError as exc:
+        raise llm.BackendError(str(exc)) from exc
+    if inc is None:
+        return scope, None, []
+    inc, dropped = validate_snippets(inc, text)
+    return scope, inc, dropped
+
+
+def single_call_enabled(proc_cfg: dict, backend: str) -> bool:
+    """processing.single_call_extraction: "cli" (default) = one call per article on the
+    subscription backend only; true = on every backend; false = two calls everywhere.
+    Pure."""
+    v = proc_cfg.get("single_call_extraction", "cli")
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() == backend
