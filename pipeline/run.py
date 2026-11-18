@@ -1139,6 +1139,16 @@ def cmd_daily(args) -> None:
     stage("hygiene", _hygiene)
     stage("health", lambda: health.run(stats))    # judges THIS run's counters
     stats["llm_spend_usd"] = round(llmcost.spent(), 2)
+    # What the subscription calls really used, beside the notional figure above
+    # (which charges a fixed weight per call and so only counts calls).
+    from pipeline import llm
+    if llm.backend() == "cli":
+        stats["llm_usage"] = llm.usage_snapshot()
+        u = stats["llm_usage"]
+        print(f"model usage: {u['calls']} call(s), {u['input_per_call']} input and "
+              f"{u['output_per_call']} output tokens a call "
+              f"({'lean' if u['lean'] else 'full'} calls; {u['cache_read_input_tokens']} "
+              f"input tokens read from cache)")
 
     # CANARIES (audit finding, 19 Jul): a run that collects nothing, extracts nothing,
     # or exports nothing used to exit 0 with a green check — the failure mode that hid

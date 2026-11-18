@@ -104,7 +104,12 @@ jobs:
       # order: fail on a dead credential, never fall through to paid API calls.
       - name: Install Claude Code CLI (subscription inference backend)
         if: steps.guard.outputs.go == 'yes'
-        run: npm install -g @anthropic-ai/claude-code
+        # Pinned: the adapter passes flags (--system-prompt, --tools "", --setting-sources
+        # "", see pipeline/llm.py CLI_LEAN_FLAGS) whose meaning an unpinned install could
+        # change under a scheduled run. 2.1.326 is the version the 16 and 17 Nov runs
+        # used, and the lean call was verified against it on 18 Nov. To upgrade: change
+        # the number, and the live ping below proves the flags before any work starts.
+        run: npm install -g @anthropic-ai/claude-code@2.1.326
 
       # Fail fast and LOUDLY rather than silently billing. Two ways this run could
       # quietly cost money instead of using the plan: a dead/absent token, or
@@ -150,9 +155,14 @@ jobs:
           # stdout only: the CLI's stderr carries node deprecation noise (seen in run
           # 36's log) that would corrupt the JSON envelope. An auth refusal still
           # arrives as an is_error envelope on stdout.
+          # The ping carries the same lean flags the pipeline's calls do, so a CLI that
+          # stops accepting one of them fails here rather than on every article.
           PING=$(timeout 180 claude -p "Reply with exactly: ok" \
                  --model claude-haiku-4-5-20251001 \
-                 --output-format json --max-turns 1 2>/dev/null || true)
+                 --output-format json --max-turns 1 \
+                 --system-prompt "You answer in one word." \
+                 --tools "" --disable-slash-commands --strict-mcp-config \
+                 --setting-sources "" --no-session-persistence 2>/dev/null || true)
           echo "$PING" | python3 -c "
           import json, sys
           raw = sys.stdin.read()
@@ -189,6 +199,10 @@ jobs:
           # drop LLM_BACKEND.
           LLM_BACKEND: cli
           LLM_CLI_MODEL: claude-opus-5
+          # Lean calls: our system prompt, no tools, no skills, no CLAUDE.md — about
+          # 31,000 fewer input tokens a call. Set to "0" to send the full Claude Code
+          # call again without a code change.
+          LLM_CLI_LEAN: "1"
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}       # session-pooler URL (runners are IPv4-only)
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
