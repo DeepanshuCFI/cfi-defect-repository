@@ -44,6 +44,22 @@ CLI_TIMEOUT_S = 600
 # Claude Code system prompt + tool definitions are ~20k tokens on every invocation.
 # Callers that can batch should batch; this module bills it per call.
 CLI_OVERHEAD_TOKENS = 20_000
+# 18 Nov 2026: that overhead is not a property of the subscription — it is Claude
+# Code's coding-agent system prompt, its tool definitions, the skills list and the
+# repo's CLAUDE.md, none of which a JSON extraction call uses. Measured on one
+# three-word prompt: 31,077 input tokens with the default flags, 163 with the flags
+# below (CLI 2.1.220; 876 on 2.1.326). So the lean call replaces the system prompt
+# with ours and switches the rest off.
+#
+# CLI_OVERHEAD_TOKENS is still what the notional meter charges per call, ON PURPOSE:
+# the daily ceiling divided by that charge is the day's call count (~290), and making
+# calls cheaper must not silently triple how much of the owner's plan the pipeline
+# takes. The real figures are recorded beside it (usage_snapshot); how many calls a
+# day to allow, now that each is small, is the owner's decision.
+CLI_LEAN_FLAGS = ("--tools", "", "--disable-slash-commands", "--strict-mcp-config",
+                  "--setting-sources", "", "--no-session-persistence")
+JSON_ONLY = ("Return a SINGLE JSON object matching this schema exactly. "
+             "No prose, no markdown fence, no commentary — the object only.")
 # Waits before re-trying a call the network refused (see TransientBlock). Three tries
 # over ~4 minutes: a passing Cloudflare challenge clears in seconds, and a block that
 # outlasts this is treated as "stop the stage", never as a per-item failure.
@@ -198,20 +214,73 @@ def _extract_json(text: str) -> dict:
     return out
 
 
+def cli_lean() -> bool:
+    """LLM_CLI_LEAN=0 restores the full Claude Code call — the rollback lever if a CLI
+    release changes one of the lean flags. Default on."""
+    return (os.environ.get("LLM_CLI_LEAN") or "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def cli_argv(binary: str, system: str, tool: dict, content: str, model: str,
+             lean: bool) -> list[str]:
+    """The command line for one call (pure, unit-tested).
+
+    Lean: our rules and the schema ARE the system prompt, the article is the whole
+    user message, and nothing else rides along. The schema sits in the system prompt
+    because it is identical on every call of a stage, which is what prompt caching
+    needs. Not lean: the call exactly as it was before 18 Nov 2026."""
+    schema = json.dumps(tool["input_schema"], ensure_ascii=False)
+    base = ["--model", model, "--output-format", "json", "--max-turns", "1"]
+    if lean:
+        return [binary, "-p", content, *base,
+                "--system-prompt", f"{system}\n\n{JSON_ONLY}\nSCHEMA:\n{schema}",
+                *CLI_LEAN_FLAGS]
+    return [binary, "-p", f"{system}\n\n{JSON_ONLY}\nSCHEMA:\n{schema}\n\n{content}", *base]
+
+
+_USAGE_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
+               "output_tokens")
+_usage = {"calls": 0, **{k: 0 for k in _USAGE_KEYS}}
+
+
+def _count(v) -> int:
+    """A token count as the CLI reported it; 0 when it is not a number. A malformed
+    usage block must never cost the article it came with."""
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _record_usage(u: dict) -> None:
+    _usage["calls"] += 1
+    for k in _USAGE_KEYS:
+        _usage[k] += _count(u.get(k))
+
+
+def usage_snapshot() -> dict:
+    """What the CLI calls of this process really used, as the CLI reported it.
+
+    `input_per_call` counts every input token the model was sent — fresh, written to
+    cache and read from cache — which is the number the lean flags exist to shrink."""
+    snap = dict(_usage)
+    sent = sum(snap[k] for k in _USAGE_KEYS[:3])
+    n = snap["calls"]
+    snap["input_per_call"] = round(sent / n) if n else None
+    snap["output_per_call"] = round(snap["output_tokens"] / n) if n else None
+    snap["lean"] = cli_lean()
+    return snap
+
+
 def _cli_once(system, tool, content, model, max_tokens):
     binary = cli_bin()
     if not binary:
         raise BackendError(
             "LLM_BACKEND=cli but the claude CLI was not found. Install it with "
             "`npm install -g @anthropic-ai/claude-code`, or set CLAUDE_BIN.")
-    schema = json.dumps(tool["input_schema"], ensure_ascii=False)
-    prompt = (f"{system}\n\nReturn a SINGLE JSON object matching this schema exactly. "
-              f"No prose, no markdown fence, no commentary — the object only.\n"
-              f"SCHEMA:\n{schema}\n\n{content}")
     try:
         p = subprocess.run(
-            [binary, "-p", prompt, "--model", model,
-             "--output-format", "json", "--max-turns", "1"],
+            cli_argv(binary, system, tool, content, model, cli_lean()),
             capture_output=True, text=True, timeout=CLI_TIMEOUT_S, env=_cli_env())
     except subprocess.TimeoutExpired as exc:
         raise BackendError(f"cli timed out after {CLI_TIMEOUT_S}s") from exc
@@ -235,10 +304,13 @@ def _cli_once(system, tool, content, model, max_tokens):
     # budget guards from silently becoming no-ops on this backend.
     from pipeline import llmcost
     u = env.get("usage") or {}
+    if not isinstance(u, dict):
+        u = {}
+    _record_usage(u)
 
     class _U:
-        input_tokens = int(u.get("input_tokens") or 0) + CLI_OVERHEAD_TOKENS
-        output_tokens = int(u.get("output_tokens") or 0)
+        input_tokens = _count(u.get("input_tokens")) + CLI_OVERHEAD_TOKENS
+        output_tokens = _count(u.get("output_tokens"))
     llmcost.add(model, _U)
     return _extract_json(result)
 
