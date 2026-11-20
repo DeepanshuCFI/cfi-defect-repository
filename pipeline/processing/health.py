@@ -34,6 +34,9 @@ DEFAULTS = {
     # retry_stranded terminalises 300/run, so a sustained figure here means that
     # stage is failing, not that intake is high.
     "stranded_new_alert": 600,
+    # The reading queue's weight table is trained on our own verdicts and goes stale
+    # as the news changes with the season. Retrain: scripts/train_queue_weights.py.
+    "queue_weights_max_age_days": 45,
     "min_extracted_last_run": 1,      # 0 extractions = budget/API/collect silently dead
     "min_published_total_growth": 0,  # reserved for future use
     # Published reports per 1,000 articles the model actually READ in the last 7 days.
@@ -134,6 +137,25 @@ def publishing_verdict(ar, waiting: int, min_reviewed: int = 20,
     return True, f"this run judged {reviewed} and published {pub}; {waiting} still waiting"
 
 
+def weights_age_verdict(trained_on: str | None, today, max_days: int) -> tuple[bool, str]:
+    """Is the reading queue's weight table fresh enough? Pure.
+
+    No table is not an alert: the queue then runs on the vocabulary-first rule, which
+    is a stated mode, not a fault. An unreadable date is an alert — a table nobody can
+    date is a table nobody will retrain."""
+    from datetime import date
+    if trained_on is None:
+        return True, "no weight table; the queue is ordered by the vocabulary-first rule"
+    try:
+        age = (today - date.fromisoformat(str(trained_on))).days
+    except ValueError:
+        return False, f"weight table has an unreadable trained_on date ({trained_on!r})"
+    if age > max_days:
+        return False, (f"reading-queue weight table is {age} days old (alert above "
+                       f"{max_days}); retrain with scripts/train_queue_weights.py")
+    return True, f"reading-queue weight table is {age} days old (retrain after {max_days})"
+
+
 def defect_vocab_pattern(keywords: dict) -> str:
     """Case-insensitive regex alternation of every infra_defect term, all languages —
     the same vocabulary cmd_process uses to put defect stories first in line."""
@@ -169,17 +191,40 @@ def collect_checks(current: dict | None = None) -> list[tuple[str, bool, str]]:
         fetched, new, stranded = cur.fetchone()
 
         # ---- extraction lag: how old is the oldest unread article that matters?
-        cur.execute("""select min(created_at), count(*), now()
-                       from source_article
-                       where processing_status = 'fetched' and clean_text ~* %s""", (pat,))
+        # "Matters" is whatever the queue itself puts first. With a weight table that
+        # is every article at or above the table's likely-defect line, scored by the
+        # very expression the queue is ordered by; without one, the defect vocabulary.
+        # (Before Nov 2026 this check matched the vocabulary case-insensitively while
+        # the queue matched it case-sensitively, so it watched articles the queue was
+        # never going to put first.)
+        from pipeline.processing import queue_score
+        table = (queue_score.load()
+                 if configload.settings().get("processing", {}).get("scored_queue", True)
+                 else None)
+        if table:
+            cur.execute(f"""select min(created_at), count(*), now()
+                            from source_article
+                            where processing_status = 'fetched'
+                              and {queue_score.SCORE_SQL} >= %s""",
+                        (table["terms"], table["weights"], table["threshold"]))
+            what = f"likely-defect article (score {table['threshold']} or more)"
+        else:
+            cur.execute("""select min(created_at), count(*), now()
+                           from source_article
+                           where processing_status = 'fetched' and clean_text ~* %s""", (pat,))
+            what = "defect-vocabulary article"
         oldest, defect_queued, db_now = cur.fetchone()
         lag = lag_days(oldest, db_now)
         out.append(("extraction_lag",
                     lag is None or lag <= cfg["defect_queue_max_age_days"],
-                    f"oldest unread defect-vocabulary article is "
+                    f"oldest unread {what} is "
                     f"{'n/a' if lag is None else f'{lag} days'} old (alert above "
                     f"{cfg['defect_queue_max_age_days']}); {defect_queued} such article(s) "
                     f"waiting, {fetched} in the queue in all"))
+        ok_w, detail_w = weights_age_verdict(
+            (table or {}).get("meta", {}).get("trained_on") if table else None,
+            db_now.date(), int(cfg["queue_weights_max_age_days"]))
+        out.append(("queue_weights_age", ok_w, detail_w))
         out.append(("new_stuck", new < cfg["new_stuck_alert"],
                     f"unprocessed 'new' articles {new} (alert at {cfg['new_stuck_alert']}; "
                     f"{new - stranded} awaiting URL resolution, {stranded} stranded)"))

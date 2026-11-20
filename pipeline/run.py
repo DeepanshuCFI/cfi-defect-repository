@@ -634,6 +634,16 @@ def prefilter_sweep(store, passes, page: int = PREFILTER_SWEEP_PAGE,
     return {"scanned": scanned, "swept": swept}
 
 
+def _count_read(stats: dict, article_id, random_ids: set) -> None:
+    """One article the model has given a scope verdict on, filed under the slice of
+    the queue it came from."""
+    if article_id in random_ids:
+        stats["read_random"] += 1
+        stats["random_ids"].append(article_id)
+    else:
+        stats["read_ranked"] += 1
+
+
 def cmd_process(args) -> dict:
     """Phase 3: fetched -> relevance -> extraction -> incident.
 
@@ -666,19 +676,44 @@ def cmd_process(args) -> dict:
                       f"article(s) retired without a model call")
             except Exception as e:      # housekeeping must never cost the day's extraction
                 print(f"  WARN prefilter sweep failed (queue left as it was): {e}")
-        arts = store.articles_by_status("fetched", limit=args.limit,
-                                        priority_terms=defect_terms)
-        n_priority = sum(1 for a in arts if any(
-            t in (a.get("clean_text") or "") for t in defect_terms))
-        print(f"processing {len(arts)} fetched article(s) "
-              f"({n_priority} defect-vocabulary, first in line)…")
+        # Reading order. With a weight table (config/queue_weights.json) the queue is
+        # ranked by score across its whole length, and a fixed share of the reads is
+        # drawn at random so next month's table is not trained only on this month's
+        # top picks. Without a table, or with processing.scored_queue=false, the
+        # vocabulary-first rule below still applies.
+        from pipeline.processing import queue_score
+        table = queue_score.load() if proc_cfg.get("scored_queue", True) else None
+        random_ids: set = set()
+        if table:
+            arts = store.articles_by_status("fetched", limit=args.limit, weights=table)
+            share = queue_score.random_share(proc_cfg)
+            n_random = int(round(len(arts) * share))
+            extra = store.articles_random("fetched", limit=n_random) if n_random else []
+            arts, random_ids = queue_score.interleave(arts, extra, share)
+            n_likely = sum(1 for a in arts
+                           if a.get("queue_score", float("-inf")) >= table["threshold"])
+            print(f"processing {len(arts)} fetched article(s) in score order "
+                  f"({n_likely} at or above the likely-defect line "
+                  f"{table['threshold']}; {len(random_ids)} drawn at random)…")
+        else:
+            arts = store.articles_by_status("fetched", limit=args.limit,
+                                            priority_terms=defect_terms)
+            n_priority = sum(1 for a in arts if any(
+                t in (a.get("clean_text") or "") for t in defect_terms))
+            print(f"processing {len(arts)} fetched article(s) "
+                  f"({n_priority} defect-vocabulary, first in line)…")
         # prefilter_swept is deliberately its own key: the did-work canary counts
         # `prefiltered` (the in-loop filter) as work, and a sweep that retires a few
         # hundred junk articles must not make a day of refused model calls look busy.
         stats = {"prefiltered": 0, "irrelevant": 0, "extracted": 0, "extracted_light": 0,
                  "skipped_pure_crash": 0, "failed": 0, "snippets_dropped": 0,
                  "prefilter_swept": sweep["swept"], "prefilter_scanned": sweep["scanned"],
-                 "model_calls": 0}
+                 "model_calls": 0,
+                 # The standing experiment: how often a read turns out to implicate
+                 # the road, for score-ordered reads and for the random slice.
+                 "queue_mode": "scored" if table else "vocabulary",
+                 "read_ranked": 0, "read_random": 0,
+                 "infra_ranked": 0, "infra_random": 0, "random_ids": []}
         stopped_reason = None                 # why the loop broke early, if it did
         from pipeline import llm, llmcost
         # One call per article on the subscription backend: every call there carries
@@ -756,6 +791,7 @@ def cmd_process(args) -> dict:
                     store.set_article_status(a["id"], "failed")
                     stats["failed"] += 1
                     continue
+                _count_read(stats, a["id"], random_ids)
                 if not cls["in_scope"]:
                     store.set_article_status(a["id"], "irrelevant")
                     stats["irrelevant"] += 1
@@ -781,6 +817,7 @@ def cmd_process(args) -> dict:
                     print(f"  WARN relevance failed #{a['id']}: {e}")
                     stats["failed"] += 1
                     continue
+                _count_read(stats, a["id"], random_ids)
                 if not cls.get("in_scope"):
                     store.set_article_status(a["id"], "irrelevant")
                     stats["irrelevant"] += 1
@@ -824,6 +861,8 @@ def cmd_process(args) -> dict:
                 stats["failed"] += 1
                 continue
             store.set_article_status(a["id"], "extracted")
+            if inc["infra_implicated"]:
+                stats["infra_random" if a["id"] in random_ids else "infra_ranked"] += 1
             if not inc["infra_implicated"]:
                 # crash-only record: keep for the >=3-in-6mo frequency counter, but it
                 # can never publish — no human queue, no paid second-pass adjudication.
