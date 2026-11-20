@@ -150,3 +150,19 @@ def test_ci_pins_the_cli_and_pings_with_the_same_lean_flags():
         if flag:
             assert flag in ping, f"the live ping is missing {flag}"
     assert "--system-prompt" in ping
+
+
+def test_the_daily_ceiling_is_about_six_hundred_calls():
+    """The notional ceiling divided by the per-call weight IS the day's call count.
+    The owner set it to about 600 on 20 Nov 2026 (it was about 297). This holds the
+    two numbers together: change either and the count a day silently moves."""
+    import json
+    from pathlib import Path
+    from pipeline import llmcost
+    cfg = json.loads((Path(__file__).resolve().parents[1]
+                      / "config/config_settings.json").read_text())["settings"]
+    ceiling = cfg["processing"]["llm_budget_usd_per_day_cli"]
+    price = cfg["models_pricing"].get("claude-opus-5", llmcost.FALLBACK_PRICE)
+    typical_output = 505                           # measured, run #171
+    per_call = (llm.CLI_OVERHEAD_TOKENS * price["in"] + typical_output * price["out"]) / 1e6
+    assert 550 <= ceiling / per_call <= 650, f"{ceiling / per_call:.0f} calls a day"
